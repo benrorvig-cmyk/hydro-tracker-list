@@ -15,7 +15,7 @@ export default async function handler(req, res) {
 
   if (req.method === "POST") {
     const { value } = req.body || {};
-    if (typeof value !== "string") {
+    if (value === undefined) {
       return res.status(400).json({ error: "Missing value" });
     }
     await redis.set(key, value);
