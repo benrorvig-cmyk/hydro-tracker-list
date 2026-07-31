@@ -4,7 +4,7 @@ import { getProjects, saveProjects } from "./storage";
 
 const STATUSES = ["Not started", "In progress", "Waiting on reply", "Done"];
 const BOARD_STATUSES = ["Not started", "In progress", "Waiting on reply"];
-const OWNERS = ["Benjamin", "Boone", "Both"];
+const OWNERS = ["Ben", "Boone", "Both"];
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
