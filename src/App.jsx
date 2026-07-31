@@ -67,6 +67,7 @@ export default function HydroTracker() {
   const [flagTarget, setFlagTarget] = useState(null);
   const [flagReasonInput, setFlagReasonInput] = useState("");
   const [confirmTarget, setConfirmTarget] = useState(null);
+  const [storageError, setStorageError] = useState("");
   const saveTimer = useRef(null);
 
   useEffect(() => {
@@ -79,9 +80,9 @@ export default function HydroTracker() {
     (async () => {
       try {
         const list = await getProjects();
-        if (!cancelled) setProjects(list);
+        if (!cancelled) { setProjects(list); setStorageError(""); }
       } catch (e) {
-        if (!cancelled) setProjects([]);
+        if (!cancelled) { setProjects([]); setStorageError(e.message || "Couldn't load the board"); }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -96,8 +97,9 @@ export default function HydroTracker() {
       try {
         const list = await getProjects();
         setProjects((prev) => (JSON.stringify(prev) !== JSON.stringify(list) ? list : prev));
+        setStorageError("");
       } catch (e) {
-        // ignore transient failures
+        setStorageError(e.message || "Couldn't sync the board");
       }
     }, 15000);
     return () => clearInterval(poll);
@@ -111,9 +113,11 @@ export default function HydroTracker() {
       try {
         await saveProjects(next);
         setSaveState("saved");
+        setStorageError("");
         setTimeout(() => setSaveState("idle"), 1200);
       } catch (e) {
         setSaveState("idle");
+        setStorageError(e.message || "Couldn't save — your last change may not have been kept");
       }
     }, 300);
   }
@@ -203,6 +207,13 @@ export default function HydroTracker() {
           {saveState === "saving" ? "Saving…" : "Synced"}
         </div>
       </header>
+
+      {storageError && (
+        <div className="tr-errorbar">
+          <AlertTriangle size={16} />
+          <span>{storageError} — check that the database is connected in Vercel.</span>
+        </div>
+      )}
 
       {flaggedUrgent.length > 0 && (
         <div className="tr-alertbar">
@@ -541,6 +552,19 @@ const css = `
   background: #FBEAE6;
   border: 1px solid #E3B6AE;
   color: var(--alert);
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 5px;
+  margin-bottom: 16px;
+}
+.tr-errorbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #3A2420;
+  border: 1px solid #6B342B;
+  color: #F3D9D3;
   padding: 9px 14px;
   font-size: 13px;
   font-weight: 500;
