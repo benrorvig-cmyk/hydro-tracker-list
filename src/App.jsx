@@ -485,6 +485,7 @@ const css = `
   --line: #DAE1EA;
   --copper: #C1662F;
   --copper-dim: #E8C7AE;
+  --green: #3F7D5C;
   --ok: #3F7D5C;
   --alert: #B23A32;
   --muted: #66738C;
@@ -703,6 +704,7 @@ const css = `
   flex-shrink: 0;
 }
 .tr-pipe-dot[data-status="Waiting on reply"] { background: var(--copper); }
+.tr-pipe-dot[data-status="In progress"] { background: var(--green); }
 .tr-count {
   margin-left: auto;
   font-family: 'IBM Plex Mono', monospace;
