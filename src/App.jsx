@@ -68,6 +68,7 @@ export default function HydroTracker() {
   const [flagReasonInput, setFlagReasonInput] = useState("");
   const [confirmTarget, setConfirmTarget] = useState(null);
   const [storageError, setStorageError] = useState("");
+  const [activePerson, setActivePerson] = useState("Benjamin"); // Benjamin | Boone
   const saveTimer = useRef(null);
 
   useEffect(() => {
@@ -123,7 +124,7 @@ export default function HydroTracker() {
   }
 
   function openNew() {
-    setDraft({ ...emptyDraft(), due: defaultDueTime() });
+    setDraft({ ...emptyDraft(), due: defaultDueTime(), owner: activePerson });
     setEditingId(null);
     setShowForm(true);
   }
@@ -188,7 +189,9 @@ export default function HydroTracker() {
     );
   }
 
-  const flaggedUrgent = projects.filter((p) => {
+  const visibleProjects = projects.filter((p) => p.owner === activePerson || p.owner === "Both");
+
+  const flaggedUrgent = visibleProjects.filter((p) => {
     const d = fmtDue(p.due);
     return p.flagged || (d && (d.urgent || d.overdue) && p.status !== "Done");
   });
@@ -223,12 +226,23 @@ export default function HydroTracker() {
       )}
 
       <div className="tr-toolbar">
-        <div className="tr-tabs">
-          <button className={"tr-tab" + (view === "board" ? " tr-tab-active" : "")} onClick={() => setView("board")}>
-            Board
-          </button>
-          <button className={"tr-tab" + (view === "done" ? " tr-tab-active" : "")} onClick={() => setView("done")}>
-            Done <span className="tr-count">{projects.filter((p) => p.status === "Done").length}</span>
+        <div className="tr-toolbar-left">
+          <div className="tr-tabs">
+            <button className={"tr-tab" + (view === "board" ? " tr-tab-active" : "")} onClick={() => setView("board")}>
+              Board
+            </button>
+            <button className={"tr-tab" + (view === "done" ? " tr-tab-active" : "")} onClick={() => setView("done")}>
+              Done <span className="tr-count">{visibleProjects.filter((p) => p.status === "Done").length}</span>
+            </button>
+          </div>
+          <button
+            className="tr-person-toggle"
+            onClick={() => setActivePerson(activePerson === "Benjamin" ? "Boone" : "Benjamin")}
+            aria-label="Switch whose view you're viewing"
+          >
+            <span className={"tr-person-pill" + (activePerson === "Boone" ? " tr-person-pill-right" : "")} />
+            <span className={activePerson === "Benjamin" ? "tr-person-active" : ""}>Benjamin</span>
+            <span className={activePerson === "Boone" ? "tr-person-active" : ""}>Boone</span>
           </button>
         </div>
         {view === "board" && (
@@ -251,7 +265,7 @@ export default function HydroTracker() {
       {view === "board" && (
       <div className="tr-board">
         {BOARD_STATUSES.map((status) => {
-          const items = projects.filter((p) => p.status === status);
+          const items = visibleProjects.filter((p) => p.status === status);
           return (
             <div className="tr-column" key={status}>
               <div className="tr-column-head">
@@ -323,7 +337,7 @@ export default function HydroTracker() {
       )}
 
       {view === "done" && (() => {
-        const doneItems = projects
+        const doneItems = visibleProjects
           .filter((p) => p.status === "Done")
           .filter((p) => p.title.toLowerCase().includes(doneSearch.trim().toLowerCase()))
           .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
@@ -580,6 +594,44 @@ const css = `
   flex-wrap: wrap;
   gap: 12px;
 }
+.tr-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.tr-person-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  background: var(--paper-card);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px;
+  cursor: pointer;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+}
+.tr-person-toggle span:not(.tr-person-pill) {
+  position: relative;
+  z-index: 1;
+  padding: 6px 14px;
+  color: var(--muted);
+  transition: color 0.15s;
+}
+.tr-person-active { color: var(--paper) !important; }
+.tr-person-pill {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  bottom: 3px;
+  width: calc(50% - 3px);
+  background: var(--ink);
+  border-radius: 999px;
+  transition: transform 0.2s ease;
+}
+.tr-person-pill-right { transform: translateX(100%); }
 .tr-tabs { display: flex; gap: 4px; }
 .tr-tab {
   font-family: 'IBM Plex Sans', sans-serif;
