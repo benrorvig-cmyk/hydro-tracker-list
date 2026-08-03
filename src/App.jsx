@@ -123,6 +123,18 @@ export default function HydroTracker() {
     }, 300);
   }
 
+  function exportData() {
+    const json = JSON.stringify(projects, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const date = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `hydro-tracker-backup-${date}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function openNew() {
     setDraft({ ...emptyDraft(), due: defaultDueTime(), owner: activePerson });
     setEditingId(null);
@@ -205,9 +217,14 @@ export default function HydroTracker() {
           <div className="tr-eyebrow">Johnson Barrow &middot; Project Log</div>
           <h1>Hydro Tracker</h1>
         </div>
-        <div className="tr-header-status">
-          <span className={"tr-dot" + (saveState === "saving" ? " tr-dot-saving" : "")} />
-          {saveState === "saving" ? "Saving…" : "Synced"}
+        <div className="tr-header-right">
+          <button className="tr-export-btn" onClick={exportData} title="Export backup as JSON">
+            ↓ Export
+          </button>
+          <div className="tr-header-status">
+            <span className={"tr-dot" + (saveState === "saving" ? " tr-dot-saving" : "")} />
+            {saveState === "saving" ? "Saving…" : "Synced"}
+          </div>
         </div>
       </header>
 
@@ -241,7 +258,7 @@ export default function HydroTracker() {
             aria-label="Switch whose view you're viewing"
           >
             <span className={"tr-person-pill" + (activePerson === "Boone" ? " tr-person-pill-right" : "")} />
-            <span className={activePerson === "Benjamin" ? "tr-person-active" : ""}>Benjamin</span>
+            <span className={activePerson === "Benjamin" ? "tr-person-active" : ""}>Ben</span>
             <span className={activePerson === "Boone" ? "tr-person-active" : ""}>Boone</span>
           </button>
         </div>
@@ -552,6 +569,25 @@ const css = `
   color: var(--muted);
   padding-bottom: 3px;
 }
+.tr-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 3px;
+}
+.tr-export-btn {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+}
+.tr-export-btn:hover { border-color: var(--ink); color: var(--ink); }
 .tr-dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--ok);
@@ -754,6 +790,7 @@ const css = `
   background: var(--muted);
   flex-shrink: 0;
 }
+.tr-pipe-dot[data-status="In progress"] { background: var(--ok); }
 .tr-pipe-dot[data-status="Waiting on reply"] { background: var(--copper); }
 .tr-count {
   margin-left: auto;
