@@ -4,7 +4,7 @@ import { getProjects, saveProjects } from "./storage";
 
 const STATUSES = ["Not started", "In progress", "Waiting on reply", "Done"];
 const BOARD_STATUSES = ["Not started", "In progress", "Waiting on reply"];
-const OWNERS = ["Benjamin", "Boone", "Both"];
+const OWNERS = ["Ben", "Boone", "Both"];
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -68,8 +68,18 @@ export default function HydroTracker() {
   const [flagReasonInput, setFlagReasonInput] = useState("");
   const [confirmTarget, setConfirmTarget] = useState(null);
   const [storageError, setStorageError] = useState("");
-  const [activePerson, setActivePerson] = useState("Benjamin"); // Benjamin | Boone
+  const [activePerson, setActivePerson] = useState("Ben"); // Ben | Boone
   const saveTimer = useRef(null);
+
+  // ── Presence & minigame ─────────────────────────────────────────────────────
+  const [bothOnline, setBothOnline] = useState(false);
+  const [showGame, setShowGame] = useState(false);
+  const [gameState, setGameState] = useState("idle"); // idle | waiting | ready | result
+  const [gameResult, setGameResult] = useState(null); // { winner, benMs, booneMs }
+  const [myReactionTime, setMyReactionTime] = useState(null);
+  const readyAt = useRef(null);
+  const gameTimerRef = useRef(null);
+  const presenceTimerRef = useRef(null);
 
   useEffect(() => {
     const tick = setInterval(() => setNow(new Date()), 60000);
@@ -105,6 +115,146 @@ export default function HydroTracker() {
     }, 15000);
     return () => clearInterval(poll);
   }, []);
+
+  // Write our heartbeat & read the other person's heartbeat
+  useEffect(() => {
+    const myKey = `presence-${activePerson.toLowerCase()}`;
+    const otherKey = `presence-${activePerson === "Ben" ? "boone" : "ben"}`;
+
+    async function heartbeat() {
+      try {
+        const ts = Date.now();
+        await fetch(`/api/storage?key=${myKey}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: ts }),
+        });
+        const res = await fetch(`/api/storage?key=${otherKey}`);
+        const data = await res.json();
+        const otherTs = data?.value ? Number(data.value) : 0;
+        const isOtherOnline = Date.now() - otherTs < 25000; // 25s window
+        setBothOnline(isOtherOnline);
+      } catch {
+        // silently ignore presence errors
+      }
+    }
+
+    heartbeat();
+    presenceTimerRef.current = setInterval(heartbeat, 10000);
+    return () => clearInterval(presenceTimerRef.current);
+  }, [activePerson]);
+
+  // Poll for game state changes (challenge/ready/result)
+  useEffect(() => {
+    if (!showGame) return;
+    const poll = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/storage?key=minigame-state`);
+        const data = await res.json();
+        if (!data?.value) return;
+        const gs = typeof data.value === "string" ? JSON.parse(data.value) : data.value;
+
+        // Other player hit ready — show the flash
+        if (gs.phase === "countdown" && gameState === "waiting" && gs.initiator !== activePerson) {
+          setGameState("countdown");
+          startCountdown();
+        }
+        // Both times are in — show result
+        if (gs.phase === "result" && gs.benMs && gs.booneMs) {
+          const winner = gs.benMs < gs.booneMs ? "Ben" : "Boone";
+          setGameResult({ winner, benMs: gs.benMs, booneMs: gs.booneMs });
+          setGameState("result");
+        }
+        // Other player recorded their time
+        if (gs.phase === "waiting_other" && gs.initiator !== activePerson && gameState === "ready") {
+          // We already have our time, combine and finish
+          const myMs = myReactionTime;
+          if (myMs) {
+            const benMs = activePerson === "Ben" ? myMs : gs.otherMs;
+            const booneMs = activePerson === "Boone" ? myMs : gs.otherMs;
+            await saveGameState({ phase: "result", benMs, booneMs });
+            const winner = benMs < booneMs ? "Ben" : "Boone";
+            setGameResult({ winner, benMs, booneMs });
+            setGameState("result");
+          }
+        }
+      } catch { /* ignore */ }
+    }, 1500);
+    return () => clearInterval(poll);
+  }, [showGame, gameState, activePerson, myReactionTime]);
+
+  async function saveGameState(obj) {
+    await fetch(`/api/storage?key=minigame-state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: JSON.stringify(obj) }),
+    });
+  }
+
+  function startCountdown() {
+    setGameState("countdown");
+    // Random delay 1.5–4s before flash
+    const delay = 1500 + Math.random() * 2500;
+    gameTimerRef.current = setTimeout(() => {
+      readyAt.current = Date.now();
+      setGameState("flash");
+    }, delay);
+  }
+
+  async function handleChallenge() {
+    setShowGame(true);
+    setGameState("waiting");
+    setGameResult(null);
+    setMyReactionTime(null);
+    await saveGameState({ phase: "challenge", initiator: activePerson });
+  }
+
+  async function handleAcceptChallenge() {
+    await saveGameState({ phase: "countdown", initiator: activePerson });
+    startCountdown();
+  }
+
+  async function handleFlashClick() {
+    if (gameState !== "flash") {
+      // Clicked too early — false start
+      setGameState("tooearly");
+      clearTimeout(gameTimerRef.current);
+      return;
+    }
+    const ms = Date.now() - readyAt.current;
+    setMyReactionTime(ms);
+    setGameState("waiting_other");
+    // Save my time, wait for other
+    const currentRes = await fetch(`/api/storage?key=minigame-state`);
+    const currentData = await currentRes.json();
+    const current = currentData?.value
+      ? (typeof currentData.value === "string" ? JSON.parse(currentData.value) : currentData.value)
+      : {};
+    const benMs = activePerson === "Ben" ? ms : current.benMs;
+    const booneMs = activePerson === "Boone" ? ms : current.booneMs;
+    if (benMs && booneMs) {
+      const winner = benMs < booneMs ? "Ben" : "Boone";
+      await saveGameState({ phase: "result", benMs, booneMs });
+      setGameResult({ winner, benMs, booneMs });
+      setGameState("result");
+    } else {
+      await saveGameState({
+        ...current,
+        phase: "waiting_other",
+        [`${activePerson === "Ben" ? "ben" : "boone"}Ms`]: ms,
+        otherMs: ms,
+      });
+    }
+  }
+
+  function closeGame() {
+    setShowGame(false);
+    setGameState("idle");
+    setGameResult(null);
+    setMyReactionTime(null);
+    clearTimeout(gameTimerRef.current);
+    saveGameState({ phase: "idle" });
+  }
 
   function persist(next) {
     setProjects(next);
@@ -218,6 +368,11 @@ export default function HydroTracker() {
           <h1>Hydro Tracker</h1>
         </div>
         <div className="tr-header-right">
+          {bothOnline && !showGame && (
+            <button className="tr-challenge-btn" onClick={handleChallenge} title="Both of you are online!">
+              ⚔️ Challenge {activePerson === "Ben" ? "Boone" : "Ben"}!
+            </button>
+          )}
           <button className="tr-export-btn" onClick={exportData} title="Export backup as JSON">
             ↓ Export
           </button>
@@ -254,11 +409,11 @@ export default function HydroTracker() {
           </div>
           <button
             className="tr-person-toggle"
-            onClick={() => setActivePerson(activePerson === "Benjamin" ? "Boone" : "Benjamin")}
+            onClick={() => setActivePerson(activePerson === "Ben" ? "Boone" : "Ben")}
             aria-label="Switch whose view you're viewing"
           >
             <span className={"tr-person-pill" + (activePerson === "Boone" ? " tr-person-pill-right" : "")} />
-            <span className={activePerson === "Benjamin" ? "tr-person-active" : ""}>Ben</span>
+            <span className={activePerson === "Ben" ? "tr-person-active" : ""}>Ben</span>
             <span className={activePerson === "Boone" ? "tr-person-active" : ""}>Boone</span>
           </button>
         </div>
@@ -499,6 +654,95 @@ export default function HydroTracker() {
         </div>
       )}
 
+      {showGame && (
+        <div className="tr-modal-backdrop" onClick={gameState === "result" || gameState === "tooearly" ? closeGame : undefined}>
+          <div className="tr-modal tr-game-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="tr-modal-head">
+              <h2>⚔️ Reaction Duel</h2>
+              <button className="tr-close" onClick={closeGame}><X size={18} /></button>
+            </div>
+
+            {gameState === "waiting" && activePerson === (gameResult === null ? activePerson : "") && (
+              <div className="tr-game-center">
+                <div className="tr-game-emoji">🕐</div>
+                <p className="tr-game-msg">Challenge sent! Waiting for {activePerson === "Ben" ? "Boone" : "Ben"} to accept…</p>
+                <p className="tr-game-sub">Keep this open. They'll see a prompt on their screen.</p>
+              </div>
+            )}
+
+            {gameState === "waiting" && (
+              // Show accept button to the other player (detected via polling)
+              <div className="tr-game-center">
+                <div className="tr-game-emoji">⚔️</div>
+                <p className="tr-game-msg">{activePerson === "Ben" ? "Boone" : "Ben"} challenged you to a reaction duel!</p>
+                <button className="tr-btn-primary tr-game-big-btn" onClick={handleAcceptChallenge}>
+                  Accept &amp; Start
+                </button>
+              </div>
+            )}
+
+            {gameState === "countdown" && (
+              <div className="tr-game-center">
+                <div className="tr-game-emoji tr-game-pulse">👀</div>
+                <p className="tr-game-msg">Get ready… click when it turns green!</p>
+                <p className="tr-game-sub">Don't click too early.</p>
+              </div>
+            )}
+
+            {gameState === "flash" && (
+              <div className="tr-game-flash" onClick={handleFlashClick}>
+                <div className="tr-game-emoji">🟢</div>
+                <p className="tr-game-msg tr-game-go">CLICK NOW!</p>
+              </div>
+            )}
+
+            {gameState === "tooearly" && (
+              <div className="tr-game-center">
+                <div className="tr-game-emoji">😬</div>
+                <p className="tr-game-msg">Too early! You jumped the gun.</p>
+                <button className="tr-btn-primary tr-game-big-btn" onClick={() => { setGameState("waiting"); saveGameState({ phase: "challenge", initiator: activePerson }); }}>
+                  Try again
+                </button>
+              </div>
+            )}
+
+            {gameState === "waiting_other" && (
+              <div className="tr-game-center">
+                <div className="tr-game-emoji">⏱️</div>
+                <p className="tr-game-msg">Your time: <strong>{myReactionTime}ms</strong></p>
+                <p className="tr-game-sub">Waiting for {activePerson === "Ben" ? "Boone" : "Ben"}…</p>
+              </div>
+            )}
+
+            {gameState === "result" && gameResult && (
+              <div className="tr-game-center">
+                <div className="tr-game-emoji">{gameResult.winner === activePerson ? "🏆" : "😅"}</div>
+                <p className="tr-game-msg">
+                  {gameResult.winner === activePerson ? "You win!" : `${gameResult.winner} wins!`}
+                </p>
+                <div className="tr-game-scores">
+                  <div className={"tr-game-score" + (gameResult.winner === "Ben" ? " tr-game-score-win" : "")}>
+                    <span className="tr-game-score-name">Ben</span>
+                    <span className="tr-game-score-ms">{gameResult.benMs}ms</span>
+                  </div>
+                  <div className="tr-game-score-vs">vs</div>
+                  <div className={"tr-game-score" + (gameResult.winner === "Boone" ? " tr-game-score-win" : "")}>
+                    <span className="tr-game-score-name">Boone</span>
+                    <span className="tr-game-score-ms">{gameResult.booneMs}ms</span>
+                  </div>
+                </div>
+                <div className="tr-game-actions">
+                  <button className="tr-btn-ghost" onClick={closeGame}>Done</button>
+                  <button className="tr-btn-primary" onClick={() => { setGameState("waiting"); setGameResult(null); setMyReactionTime(null); saveGameState({ phase: "challenge", initiator: activePerson }); }}>
+                    Rematch!
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <footer className="tr-footer">
         Shared board — changes sync for everyone with this link.
       </footer>
@@ -652,7 +896,9 @@ const css = `
 .tr-person-toggle span:not(.tr-person-pill) {
   position: relative;
   z-index: 1;
-  padding: 6px 14px;
+  padding: 6px 0;
+  width: 56px;
+  text-align: center;
   color: var(--muted);
   transition: color 0.15s;
 }
@@ -662,12 +908,12 @@ const css = `
   top: 3px;
   left: 3px;
   bottom: 3px;
-  width: calc(50% - 3px);
+  width: 56px;
   background: var(--ink);
   border-radius: 999px;
   transition: transform 0.2s ease;
 }
-.tr-person-pill-right { transform: translateX(100%); }
+.tr-person-pill-right { transform: translateX(56px); }
 .tr-tabs { display: flex; gap: 4px; }
 .tr-tab {
   font-family: 'IBM Plex Sans', sans-serif;
@@ -978,5 +1224,139 @@ const css = `
   font-size: 11px;
   color: var(--muted);
   font-family: 'IBM Plex Mono', monospace;
+}
+
+/* ── Challenge button ───────────────────────────────── */
+.tr-challenge-btn {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #C1662F, #16233D);
+  color: #fff;
+  border: none;
+  padding: 6px 13px;
+  border-radius: 999px;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  animation: tr-challenge-pulse 2s ease-in-out infinite;
+  box-shadow: 0 2px 8px rgba(193,102,47,0.35);
+}
+.tr-challenge-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 14px rgba(193,102,47,0.5);
+}
+@keyframes tr-challenge-pulse {
+  0%, 100% { box-shadow: 0 2px 8px rgba(193,102,47,0.35); }
+  50% { box-shadow: 0 2px 16px rgba(193,102,47,0.65); }
+}
+
+/* ── Game modal ─────────────────────────────────────── */
+.tr-game-modal {
+  max-width: 360px;
+  text-align: center;
+}
+.tr-game-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0 6px;
+}
+.tr-game-emoji {
+  font-size: 48px;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+.tr-game-pulse {
+  animation: tr-game-pulse 0.8s ease-in-out infinite alternate;
+}
+@keyframes tr-game-pulse {
+  from { transform: scale(1); }
+  to { transform: scale(1.15); }
+}
+.tr-game-msg {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0;
+  line-height: 1.3;
+}
+.tr-game-go {
+  color: var(--ok);
+  font-size: 24px;
+  animation: tr-game-pop 0.15s ease-out;
+}
+@keyframes tr-game-pop {
+  from { transform: scale(0.7); opacity: 0.5; }
+  to { transform: scale(1); opacity: 1; }
+}
+.tr-game-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+.tr-game-big-btn {
+  margin-top: 8px;
+  padding: 11px 28px;
+  font-size: 14px;
+}
+.tr-game-flash {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 0 14px;
+  cursor: pointer;
+  border-radius: 8px;
+  background: #e8f5ee;
+  margin: 0 -4px;
+  transition: background 0.1s;
+  user-select: none;
+}
+.tr-game-flash:active { background: #d0eddd; }
+.tr-game-scores {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 8px 0;
+}
+.tr-game-score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 18px;
+  border-radius: 6px;
+  border: 1.5px solid var(--line);
+  background: var(--paper);
+  min-width: 80px;
+}
+.tr-game-score-win {
+  border-color: var(--ok);
+  background: #edf6f1;
+}
+.tr-game-score-name {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.tr-game-score-ms {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.tr-game-score-win .tr-game-score-ms { color: var(--ok); }
+.tr-game-score-vs {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+.tr-game-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
 }
 `;
