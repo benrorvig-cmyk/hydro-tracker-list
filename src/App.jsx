@@ -49,6 +49,7 @@ const emptyDraft = () => ({
   status: "Not started",
   due: "",
   notes: "",
+  projectCode: "",
   flagged: false,
   flagReason: "",
   updatedAt: "",
@@ -203,6 +204,17 @@ export default function HydroTracker() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [view]);
+
+  const [copiedCode, setCopiedCode] = useState(null);
+
+  const DYNAMICS_URL = "https://aellc.crm.dynamics.com/main.aspx?appid=134bf34e-1fd8-ef11-8eea-6045bdd871bf&forceUCI=1&pagetype=entitylist&etn=ae_project&viewid=f6702143-650b-45d3-9cec-d49d8bebbdb5&viewType=1039";
+
+  function openDynamics(code) {
+    navigator.clipboard.writeText(code).catch(() => {});
+    setCopiedCode(code);
+    setTimeout(() => setCopiedCode(null), 2000);
+    window.open(DYNAMICS_URL, "_blank", "noopener");
+  }
 
   function persist(next) {
     setProjects(next);
@@ -446,7 +458,7 @@ export default function HydroTracker() {
         {BOARD_STATUSES.map((status) => {
           const rawItems = visibleProjects
             .filter((p) => p.status === status)
-            .filter((p) => !boardSearch.trim() || p.title.toLowerCase().includes(boardSearch.trim().toLowerCase()) || (p.notes || "").toLowerCase().includes(boardSearch.trim().toLowerCase()));
+            .filter((p) => !boardSearch.trim() || p.title.toLowerCase().includes(boardSearch.trim().toLowerCase()) || (p.notes || "").toLowerCase().includes(boardSearch.trim().toLowerCase()) || (p.projectCode || "").toLowerCase().includes(boardSearch.trim().toLowerCase()));
           const items = [...rawItems].sort((a, b) => {
             if (boardSort === "due") {
               if (!a.due && !b.due) return 0;
@@ -481,6 +493,15 @@ export default function HydroTracker() {
                         </div>
                       )}
                       <div className="tr-card-title" onClick={() => openEdit(p)}>{p.title}</div>
+                      {p.projectCode && (
+                        <button
+                          className={"tr-code-badge" + (copiedCode === p.projectCode ? " tr-code-badge-copied" : "")}
+                          onClick={() => openDynamics(p.projectCode)}
+                          title="Open Dynamics 365 — code copied to clipboard"
+                        >
+                          {copiedCode === p.projectCode ? "✓ copied!" : p.projectCode}
+                        </button>
+                      )}
                       <div className="tr-card-meta">
                         <span className="tr-owner">
                           {p.owner === "Both" ? <Users size={12} /> : <User size={12} />}
@@ -532,7 +553,7 @@ export default function HydroTracker() {
       {view === "done" && (() => {
         const doneItems = visibleProjects
           .filter((p) => p.status === "Done")
-          .filter((p) => p.title.toLowerCase().includes(doneSearch.trim().toLowerCase()))
+          .filter((p) => p.title.toLowerCase().includes(doneSearch.trim().toLowerCase()) || (p.projectCode || "").toLowerCase().includes(doneSearch.trim().toLowerCase()))
           .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
         return (
           <div className="tr-donelist">
@@ -554,6 +575,15 @@ export default function HydroTracker() {
                         {p.owner}
                       </span>
                       {u && <span>Completed {u.dateStr} &middot; {u.rel}</span>}
+                      {p.projectCode && (
+                        <button
+                          className={"tr-code-badge" + (copiedCode === p.projectCode ? " tr-code-badge-copied" : "")}
+                          onClick={() => openDynamics(p.projectCode)}
+                          title="Open Dynamics 365 — code copied to clipboard"
+                        >
+                          {copiedCode === p.projectCode ? "✓ copied!" : p.projectCode}
+                        </button>
+                      )}
                     </div>
                   </div>
                   <button className="tr-del-btn" onClick={() => requestDelete(p)} title="Delete">
@@ -596,14 +626,31 @@ export default function HydroTracker() {
                 </select>
               </label>
             </div>
-            <label className="tr-field">
-              <span>Due</span>
-              <input
-                type="datetime-local"
-                value={draft.due}
-                onChange={(e) => setDraft({ ...draft, due: e.target.value })}
-              />
-            </label>
+            <div className="tr-field-row">
+              <label className="tr-field">
+                <span>Project code <span className="tr-field-hint">XXXX-XXXX</span></span>
+                <input
+                  value={draft.projectCode || ""}
+                  onChange={(e) => {
+                    let v = e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, "");
+                    if (v.length === 4 && (draft.projectCode || "").length === 3) v = v + "-";
+                    if (v.length > 9) v = v.slice(0, 9);
+                    setDraft({ ...draft, projectCode: v });
+                  }}
+                  placeholder="e.g. 1234-5678"
+                  maxLength={9}
+                  className="tr-code-input"
+                />
+              </label>
+              <label className="tr-field">
+                <span>Due</span>
+                <input
+                  type="datetime-local"
+                  value={draft.due}
+                  onChange={(e) => setDraft({ ...draft, due: e.target.value })}
+                />
+              </label>
+            </div>
             <label className="tr-field">
               <span>Notes</span>
               <textarea
@@ -1226,6 +1273,45 @@ const css = `
   font-family: 'IBM Plex Mono', monospace;
 }
 
+.tr-code-badge {
+  display: inline-flex;
+  align-items: center;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  background: #EAF0F8;
+  color: #2A4A7F;
+  border: 1px solid #C2D0E8;
+  border-radius: 4px;
+  padding: 2px 7px;
+  cursor: pointer;
+  margin-top: 5px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.tr-code-badge:hover {
+  background: #16233D;
+  color: #E8F0FF;
+  border-color: #16233D;
+}
+.tr-code-badge-copied {
+  background: #3F7D5C !important;
+  color: #fff !important;
+  border-color: #3F7D5C !important;
+}
+.tr-code-input {
+  font-family: 'IBM Plex Mono', monospace !important;
+  letter-spacing: 0.08em;
+}
+.tr-field-hint {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 4px;
+  letter-spacing: 0.04em;
+}
 .tr-search-clear {
   background: none;
   border: none;
