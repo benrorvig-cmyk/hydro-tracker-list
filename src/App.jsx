@@ -54,6 +54,78 @@ const emptyDraft = () => ({
   updatedAt: "",
 });
 
+function randomBetween(a, b) { return a + Math.random() * (b - a); }
+
+function ConfettiBurst() {
+  const canvasRef = useRef(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const COLORS = ["#C1662F","#3F7D5C","#16233D","#F1A35A","#6EB89A","#E8C7AE","#B23A32","#5C8DD6"];
+    const SHAPES = ["rect", "circle", "strip"];
+    const count = 120;
+    const particles = Array.from({ length: count }, () => ({
+      x: randomBetween(canvas.width * 0.25, canvas.width * 0.75),
+      y: randomBetween(canvas.height * 0.3, canvas.height * 0.5),
+      vx: randomBetween(-6, 6),
+      vy: randomBetween(-14, -4),
+      rot: randomBetween(0, Math.PI * 2),
+      rotV: randomBetween(-0.2, 0.2),
+      w: randomBetween(7, 14),
+      h: randomBetween(5, 10),
+      color: COLORS[Math.floor(Math.random() * COLORS.length)],
+      shape: SHAPES[Math.floor(Math.random() * SHAPES.length)],
+      alpha: 1,
+    }));
+
+    let raf;
+    let start = null;
+    const duration = 2000;
+
+    function draw(ts) {
+      if (!start) start = ts;
+      const elapsed = ts - start;
+      const progress = Math.min(elapsed / duration, 1);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      particles.forEach((p) => {
+        p.vy += 0.45; // gravity
+        p.vx *= 0.99; // air drag
+        p.x += p.vx;
+        p.y += p.vy;
+        p.rot += p.rotV;
+        p.alpha = Math.max(0, 1 - progress * 1.4);
+        ctx.save();
+        ctx.globalAlpha = p.alpha;
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.fillStyle = p.color;
+        if (p.shape === "circle") {
+          ctx.beginPath();
+          ctx.arc(0, 0, p.w / 2, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (p.shape === "strip") {
+          ctx.fillRect(-p.w / 2, -p.h / 4, p.w, p.h / 2);
+        } else {
+          ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        }
+        ctx.restore();
+      });
+      if (progress < 1) raf = requestAnimationFrame(draw);
+    }
+
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  return <canvas ref={canvasRef} style={{
+    position: "fixed", inset: 0, pointerEvents: "none", zIndex: 9999,
+  }} />;
+}
+
 export default function HydroTracker() {
   const [projects, setProjects] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -68,8 +140,9 @@ export default function HydroTracker() {
   const [flagReasonInput, setFlagReasonInput] = useState("");
   const [confirmTarget, setConfirmTarget] = useState(null);
   const [storageError, setStorageError] = useState("");
-  const [activePerson, setActivePerson] = useState("Ben"); // Ben | Boone
-  const saveTimer = useRef(null);
+  const [boardSort, setBoardSort] = useState("added"); // added | due | updated
+  const [confettiId, setConfettiId] = useState(null); // project id that just got marked done
+  const confettiRef = useRef(null);
 
   // ── Presence & minigame ─────────────────────────────────────────────────────
   const [bothOnline, setBothOnline] = useState(false);
@@ -77,9 +150,12 @@ export default function HydroTracker() {
   const [gameState, setGameState] = useState("idle"); // idle | waiting | ready | result
   const [gameResult, setGameResult] = useState(null); // { winner, benMs, booneMs }
   const [myReactionTime, setMyReactionTime] = useState(null);
+  const [showImport, setShowImport] = useState(false);
+  const [importError, setImportError] = useState("");
   const readyAt = useRef(null);
   const gameTimerRef = useRef(null);
   const presenceTimerRef = useRef(null);
+  const importFileRef = useRef(null);
 
   useEffect(() => {
     const tick = setInterval(() => setNow(new Date()), 60000);
@@ -144,7 +220,7 @@ export default function HydroTracker() {
     return () => clearInterval(presenceTimerRef.current);
   }, [activePerson]);
 
-  // Poll for game state changes (challenge/ready/result)
+  // Poll for game state changes every 1.5s
   useEffect(() => {
     if (!showGame) return;
     const poll = setInterval(async () => {
@@ -154,34 +230,44 @@ export default function HydroTracker() {
         if (!data?.value) return;
         const gs = typeof data.value === "string" ? JSON.parse(data.value) : data.value;
 
-        // Other player hit ready — show the flash
-        if (gs.phase === "countdown" && gameState === "waiting" && gs.initiator !== activePerson) {
-          setGameState("countdown");
-          startCountdown();
-        }
-        // Both times are in — show result
-        if (gs.phase === "result" && gs.benMs && gs.booneMs) {
-          const winner = gs.benMs < gs.booneMs ? "Ben" : "Boone";
-          setGameResult({ winner, benMs: gs.benMs, booneMs: gs.booneMs });
-          setGameState("result");
-        }
-        // Other player recorded their time
-        if (gs.phase === "waiting_other" && gs.initiator !== activePerson && gameState === "ready") {
-          // We already have our time, combine and finish
-          const myMs = myReactionTime;
-          if (myMs) {
-            const benMs = activePerson === "Ben" ? myMs : gs.otherMs;
-            const booneMs = activePerson === "Boone" ? myMs : gs.otherMs;
-            await saveGameState({ phase: "result", benMs, booneMs });
-            const winner = benMs < booneMs ? "Ben" : "Boone";
-            setGameResult({ winner, benMs, booneMs });
-            setGameState("result");
+        setGameState((current) => {
+          // Challengee sees the challenge and should show accept screen
+          if (gs.phase === "challenge" && current === "idle" && gs.initiator !== activePerson) {
+            return "challenged";
           }
-        }
+          // Both players: challenger accepted, start countdown
+          if (gs.phase === "countdown" && current === "waiting") {
+            startCountdown();
+            return "countdown"; // startCountdown will set it, but set it here too to stop re-firing
+          }
+          // Result came in from the other side
+          if (gs.phase === "result" && gs.benMs && gs.booneMs && current !== "result") {
+            const winner = gs.benMs < gs.booneMs ? "Ben" : "Boone";
+            setGameResult({ winner, benMs: gs.benMs, booneMs: gs.booneMs });
+            return "result";
+          }
+          // Other player recorded their time while we're waiting
+          if (gs.phase === "waiting_other" && current === "waiting_other") {
+            setMyReactionTime((myMs) => {
+              if (!myMs) return myMs;
+              const benMs = activePerson === "Ben" ? myMs : gs[activePerson === "Ben" ? "booneMs" : "benMs"];
+              const booneMs = activePerson === "Boone" ? myMs : gs[activePerson === "Boone" ? "benMs" : "booneMs"];
+              if (benMs && booneMs) {
+                const winner = benMs < booneMs ? "Ben" : "Boone";
+                saveGameState({ phase: "result", benMs, booneMs });
+                setGameResult({ winner, benMs, booneMs });
+                setGameState("result");
+              }
+              return myMs;
+            });
+          }
+          return current;
+        });
       } catch { /* ignore */ }
     }, 1500);
     return () => clearInterval(poll);
-  }, [showGame, gameState, activePerson, myReactionTime]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showGame, activePerson]);
 
   async function saveGameState(obj) {
     await fetch(`/api/storage?key=minigame-state`, {
@@ -192,8 +278,7 @@ export default function HydroTracker() {
   }
 
   function startCountdown() {
-    setGameState("countdown");
-    // Random delay 1.5–4s before flash
+    clearTimeout(gameTimerRef.current);
     const delay = 1500 + Math.random() * 2500;
     gameTimerRef.current = setTimeout(() => {
       readyAt.current = Date.now();
@@ -210,41 +295,42 @@ export default function HydroTracker() {
   }
 
   async function handleAcceptChallenge() {
-    await saveGameState({ phase: "countdown", initiator: activePerson });
+    // Both players will see phase:"countdown" in the poll and call startCountdown()
+    setGameState("countdown");
     startCountdown();
+    await saveGameState({ phase: "countdown", initiator: activePerson });
   }
 
   async function handleFlashClick() {
-    if (gameState !== "flash") {
-      // Clicked too early — false start
-      setGameState("tooearly");
-      clearTimeout(gameTimerRef.current);
-      return;
-    }
     const ms = Date.now() - readyAt.current;
     setMyReactionTime(ms);
     setGameState("waiting_other");
-    // Save my time, wait for other
+    // Fetch current state to see if the other person already recorded
     const currentRes = await fetch(`/api/storage?key=minigame-state`);
     const currentData = await currentRes.json();
     const current = currentData?.value
       ? (typeof currentData.value === "string" ? JSON.parse(currentData.value) : currentData.value)
       : {};
-    const benMs = activePerson === "Ben" ? ms : current.benMs;
-    const booneMs = activePerson === "Boone" ? ms : current.booneMs;
-    if (benMs && booneMs) {
+    const myKey = activePerson === "Ben" ? "benMs" : "booneMs";
+    const otherKey = activePerson === "Ben" ? "booneMs" : "benMs";
+    const updated = { ...current, phase: "waiting_other", [myKey]: ms };
+    if (current[otherKey]) {
+      // Other already recorded — finish now
+      const benMs = updated.benMs;
+      const booneMs = updated.booneMs;
       const winner = benMs < booneMs ? "Ben" : "Boone";
       await saveGameState({ phase: "result", benMs, booneMs });
       setGameResult({ winner, benMs, booneMs });
       setGameState("result");
     } else {
-      await saveGameState({
-        ...current,
-        phase: "waiting_other",
-        [`${activePerson === "Ben" ? "ben" : "boone"}Ms`]: ms,
-        otherMs: ms,
-      });
+      await saveGameState(updated);
     }
+  }
+
+  async function handleEarlyClick() {
+    clearTimeout(gameTimerRef.current);
+    setGameState("tooearly");
+    await saveGameState({ phase: "tooearly", initiator: activePerson });
   }
 
   function closeGame() {
@@ -283,6 +369,31 @@ export default function HydroTracker() {
     a.download = `hydro-tracker-backup-${date}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  function handleImportFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target.result);
+        if (!Array.isArray(parsed)) throw new Error("File must contain an array of projects.");
+        // Normalise old "Benjamin" owner to "Ben"
+        const normalised = parsed.map((p) => ({
+          ...p,
+          owner: p.owner === "Benjamin" ? "Ben" : p.owner,
+        }));
+        persist(normalised);
+        setShowImport(false);
+        setImportError("");
+      } catch (err) {
+        setImportError(err.message || "Couldn't parse that file.");
+      }
+    };
+    reader.readAsText(file);
+    // Reset input so the same file can be re-selected if needed
+    e.target.value = "";
   }
 
   function openNew() {
@@ -339,7 +450,14 @@ export default function HydroTracker() {
     setFlagTarget(null);
   }
 
+  useEffect(() => {
+    if (!confettiId) return;
+    const t = setTimeout(() => setConfettiId(null), 2200);
+    return () => clearTimeout(t);
+  }, [confettiId]);
+
   function setStatus(p, status) {
+    if (status === "Done") setConfettiId(p.id);
     persist(projects.map((x) => (x.id === p.id ? { ...x, status, updatedAt: new Date().toISOString() } : x)));
   }
 
@@ -373,6 +491,9 @@ export default function HydroTracker() {
               ⚔️ Challenge {activePerson === "Ben" ? "Boone" : "Ben"}!
             </button>
           )}
+          <button className="tr-export-btn" onClick={() => { setImportError(""); setShowImport(true); }} title="Import a backup JSON">
+            ↑ Import
+          </button>
           <button className="tr-export-btn" onClick={exportData} title="Export backup as JSON">
             ↓ Export
           </button>
@@ -418,9 +539,19 @@ export default function HydroTracker() {
           </button>
         </div>
         {view === "board" && (
-          <button className="tr-btn-primary" onClick={openNew}>
-            <Plus size={16} /> New project
-          </button>
+          <div className="tr-toolbar-right">
+            <div className="tr-sort-wrap">
+              <span className="tr-sort-label">Sort</span>
+              <select className="tr-sort-select" value={boardSort} onChange={(e) => setBoardSort(e.target.value)}>
+                <option value="added">Date added</option>
+                <option value="due">Due date</option>
+                <option value="updated">Last updated</option>
+              </select>
+            </div>
+            <button className="tr-btn-primary" onClick={openNew}>
+              <Plus size={16} /> New project
+            </button>
+          </div>
         )}
         {view === "done" && (
           <div className="tr-search">
@@ -437,7 +568,19 @@ export default function HydroTracker() {
       {view === "board" && (
       <div className="tr-board">
         {BOARD_STATUSES.map((status) => {
-          const items = visibleProjects.filter((p) => p.status === status);
+          const rawItems = visibleProjects.filter((p) => p.status === status);
+          const items = [...rawItems].sort((a, b) => {
+            if (boardSort === "due") {
+              if (!a.due && !b.due) return 0;
+              if (!a.due) return 1;
+              if (!b.due) return -1;
+              return new Date(a.due) - new Date(b.due);
+            }
+            if (boardSort === "updated") {
+              return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+            }
+            return 0; // "added" keeps insertion order
+          });
           return (
             <div className="tr-column" key={status}>
               <div className="tr-column-head">
@@ -654,6 +797,38 @@ export default function HydroTracker() {
         </div>
       )}
 
+      {showImport && (
+        <div className="tr-modal-backdrop" onClick={() => setShowImport(false)}>
+          <div className="tr-modal tr-modal-sm" onClick={(e) => e.stopPropagation()}>
+            <div className="tr-modal-head">
+              <h2>Import backup</h2>
+              <button className="tr-close" onClick={() => setShowImport(false)}><X size={18} /></button>
+            </div>
+            <p className="tr-modal-subtitle">
+              Choose a <code>.json</code> file exported from Hydro Tracker. This will <strong>replace</strong> all current projects on the board.
+            </p>
+            {importError && (
+              <div className="tr-errorbar" style={{marginBottom: "12px"}}>
+                <AlertTriangle size={14} /> {importError}
+              </div>
+            )}
+            <input
+              ref={importFileRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: "none" }}
+              onChange={handleImportFile}
+            />
+            <div className="tr-modal-actions">
+              <button className="tr-btn-ghost" onClick={() => setShowImport(false)}>Cancel</button>
+              <button className="tr-btn-primary" onClick={() => importFileRef.current?.click()}>
+                Choose file…
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showGame && (
         <div className="tr-modal-backdrop" onClick={gameState === "result" || gameState === "tooearly" ? closeGame : undefined}>
           <div className="tr-modal tr-game-modal" onClick={(e) => e.stopPropagation()}>
@@ -662,33 +837,36 @@ export default function HydroTracker() {
               <button className="tr-close" onClick={closeGame}><X size={18} /></button>
             </div>
 
-            {gameState === "waiting" && activePerson === (gameResult === null ? activePerson : "") && (
+            {/* Challenger: waiting for the other to accept */}
+            {gameState === "waiting" && (
               <div className="tr-game-center">
                 <div className="tr-game-emoji">🕐</div>
-                <p className="tr-game-msg">Challenge sent! Waiting for {activePerson === "Ben" ? "Boone" : "Ben"} to accept…</p>
-                <p className="tr-game-sub">Keep this open. They'll see a prompt on their screen.</p>
+                <p className="tr-game-msg">Challenge sent!</p>
+                <p className="tr-game-sub">Waiting for {activePerson === "Ben" ? "Boone" : "Ben"} to accept… keep this open.</p>
               </div>
             )}
 
-            {gameState === "waiting" && (
-              // Show accept button to the other player (detected via polling)
+            {/* Challengee: poll detected a challenge, show accept button */}
+            {gameState === "challenged" && (
               <div className="tr-game-center">
                 <div className="tr-game-emoji">⚔️</div>
-                <p className="tr-game-msg">{activePerson === "Ben" ? "Boone" : "Ben"} challenged you to a reaction duel!</p>
+                <p className="tr-game-msg">{activePerson === "Ben" ? "Boone" : "Ben"} challenged you!</p>
                 <button className="tr-btn-primary tr-game-big-btn" onClick={handleAcceptChallenge}>
                   Accept &amp; Start
                 </button>
               </div>
             )}
 
+            {/* Both: counting down before the flash */}
             {gameState === "countdown" && (
-              <div className="tr-game-center">
+              <div className="tr-game-center" onClick={handleEarlyClick} style={{cursor:"pointer"}}>
                 <div className="tr-game-emoji tr-game-pulse">👀</div>
-                <p className="tr-game-msg">Get ready… click when it turns green!</p>
-                <p className="tr-game-sub">Don't click too early.</p>
+                <p className="tr-game-msg">Get ready…</p>
+                <p className="tr-game-sub">Click when it turns green. (Click now = false start!)</p>
               </div>
             )}
 
+            {/* Both: GO! */}
             {gameState === "flash" && (
               <div className="tr-game-flash" onClick={handleFlashClick}>
                 <div className="tr-game-emoji">🟢</div>
@@ -696,16 +874,18 @@ export default function HydroTracker() {
               </div>
             )}
 
+            {/* False start */}
             {gameState === "tooearly" && (
               <div className="tr-game-center">
                 <div className="tr-game-emoji">😬</div>
                 <p className="tr-game-msg">Too early! You jumped the gun.</p>
-                <button className="tr-btn-primary tr-game-big-btn" onClick={() => { setGameState("waiting"); saveGameState({ phase: "challenge", initiator: activePerson }); }}>
+                <button className="tr-btn-primary tr-game-big-btn" onClick={() => { setGameState("waiting"); setMyReactionTime(null); saveGameState({ phase: "challenge", initiator: activePerson }); }}>
                   Try again
                 </button>
               </div>
             )}
 
+            {/* Waiting for other player's time */}
             {gameState === "waiting_other" && (
               <div className="tr-game-center">
                 <div className="tr-game-emoji">⏱️</div>
@@ -714,6 +894,7 @@ export default function HydroTracker() {
               </div>
             )}
 
+            {/* Result */}
             {gameState === "result" && gameResult && (
               <div className="tr-game-center">
                 <div className="tr-game-emoji">{gameResult.winner === activePerson ? "🏆" : "😅"}</div>
@@ -742,6 +923,8 @@ export default function HydroTracker() {
           </div>
         </div>
       )}
+
+      {confettiId && <ConfettiBurst />}
 
       <footer className="tr-footer">
         Shared board — changes sync for everyone with this link.
@@ -1217,6 +1400,40 @@ const css = `
   border-color: var(--alert);
 }
 .tr-btn-danger-solid:hover { background: #962e28; }
+
+.tr-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tr-sort-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--paper-card);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 5px 10px;
+}
+.tr-sort-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.tr-sort-select {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  background: none;
+  border: none;
+  outline: none;
+  cursor: pointer;
+  padding: 0;
+}
+.tr-sort-select:hover { color: var(--copper); }
 
 .tr-footer {
   margin-top: 22px;
