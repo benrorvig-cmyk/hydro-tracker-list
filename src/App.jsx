@@ -140,8 +140,9 @@ export default function HydroTracker() {
   const [flagReasonInput, setFlagReasonInput] = useState("");
   const [confirmTarget, setConfirmTarget] = useState(null);
   const [storageError, setStorageError] = useState("");
+  const [activePerson, setActivePerson] = useState("Ben"); // Ben | Boone
   const [boardSort, setBoardSort] = useState("added"); // added | due | updated
-  const [confettiId, setConfettiId] = useState(null); // project id that just got marked done
+  const [confettiId, setConfettiId] = useState(null);
   const confettiRef = useRef(null);
 
   // ── Presence & minigame ─────────────────────────────────────────────────────
@@ -152,6 +153,7 @@ export default function HydroTracker() {
   const [myReactionTime, setMyReactionTime] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [importError, setImportError] = useState("");
+  const saveTimer = useRef(null);
   const readyAt = useRef(null);
   const gameTimerRef = useRef(null);
   const presenceTimerRef = useRef(null);
