@@ -494,13 +494,15 @@ export default function HydroTracker() {
                       )}
                       <div className="tr-card-title" onClick={() => openEdit(p)}>{p.title}</div>
                       {p.projectCode && (
-                        <button
-                          className={"tr-code-badge" + (copiedCode === p.projectCode ? " tr-code-badge-copied" : "")}
-                          onClick={() => openDynamics(p.projectCode)}
-                          title="Open Dynamics 365 — code copied to clipboard"
-                        >
-                          {copiedCode === p.projectCode ? "✓ copied!" : p.projectCode}
-                        </button>
+                        <div className="tr-code-row">
+                          <button
+                            className={"tr-code-badge" + (copiedCode === p.projectCode ? " tr-code-badge-copied" : "")}
+                            onClick={() => openDynamics(p.projectCode)}
+                            title="Open Dynamics 365 — code copied to clipboard"
+                          >
+                            {copiedCode === p.projectCode ? "✓ copied!" : p.projectCode}
+                          </button>
+                        </div>
                       )}
                       <div className="tr-card-meta">
                         <span className="tr-owner">
@@ -1273,6 +1275,11 @@ const css = `
   font-family: 'IBM Plex Mono', monospace;
 }
 
+.tr-code-row {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 2px;
+}
 .tr-code-badge {
   display: inline-flex;
   align-items: center;
@@ -1286,7 +1293,6 @@ const css = `
   border-radius: 4px;
   padding: 2px 7px;
   cursor: pointer;
-  margin-top: 5px;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
   white-space: nowrap;
 }
