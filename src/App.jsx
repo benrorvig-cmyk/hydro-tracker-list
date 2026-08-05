@@ -126,6 +126,114 @@ function ConfettiBurst() {
   }} />;
 }
 
+function MonthTree() {
+  const now = new Date();
+  const day = now.getDate(); // 1–31
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  // t goes 0→1 across the month. On day 1 it's a fresh sapling.
+  const t = (day - 1) / (daysInMonth - 1);
+
+  // ── geometry helpers ──────────────────────────────────────────────
+  const W = 64, H = 72;
+  const cx = W / 2;
+  const groundY = H - 6;
+
+  // Trunk: grows from stubby to tall
+  const trunkH = 10 + t * 28;
+  const trunkW = 2.5 + t * 1.5;
+  const trunkTop = groundY - trunkH;
+
+  // Canopy: three layered triangles that scale up
+  const canopyLayers = [
+    { yFrac: 0.0, wFrac: 1.00, hFrac: 0.55 },
+    { yFrac: 0.3, wFrac: 0.80, hFrac: 0.52 },
+    { yFrac: 0.55, wFrac: 0.60, hFrac: 0.48 },
+  ];
+
+  const maxCanopyH = trunkH * 1.15;
+  const maxCanopyW = 38;
+  const canopyScale = 0.15 + t * 0.85; // starts tiny, reaches full
+
+  // Roots: two small arcs that spread with age
+  const rootSpread = 3 + t * 6;
+  const rootDepth = 2 + t * 3;
+
+  // Color: slightly more saturated green as it grows
+  const greenL = Math.round(38 + t * 14); // 38→52 lightness
+  const leafColor = `hsl(150, ${Math.round(45 + t * 20)}%, ${greenL}%)`;
+  const darkLeaf = `hsl(150, ${Math.round(40 + t * 20)}%, ${Math.round(28 + t * 10)}%)`;
+  const trunkColor = `hsl(28, ${Math.round(35 + t * 15)}%, ${Math.round(30 + t * 8)}%)`;
+
+  // ── build canopy triangles ─────────────────────────────────────────
+  const canopyPaths = canopyLayers.map(({ yFrac, wFrac, hFrac }, i) => {
+    const layerW = maxCanopyW * wFrac * canopyScale;
+    const layerH = maxCanopyH * hFrac * canopyScale;
+    const tipY = trunkTop - maxCanopyH * canopyScale * yFrac;
+    const baseY = tipY + layerH;
+    const overlap = i < canopyLayers.length - 1 ? layerH * 0.22 : 0;
+    return (
+      <polygon
+        key={i}
+        points={`${cx},${tipY - overlap} ${cx - layerW / 2},${baseY} ${cx + layerW / 2},${baseY}`}
+        fill={i === 0 ? darkLeaf : leafColor}
+        opacity={0.92 + i * 0.04}
+      />
+    );
+  });
+
+  // ── tooltip: day X of Y ───────────────────────────────────────────
+  const ordinal = (n) => {
+    const s = ["th","st","nd","rd"], v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  };
+  const tooltip = `${ordinal(day)} of ${daysInMonth} — ${Math.round(t * 100)}% through the month`;
+
+  return (
+    <svg
+      width={W} height={H}
+      viewBox={`0 0 ${W} ${H}`}
+      className="tr-month-tree"
+      aria-label={tooltip}
+      title={tooltip}
+      style={{ display: "block", flexShrink: 0 }}
+    >
+      {/* Ground line */}
+      <line x1={cx - 10} y1={groundY} x2={cx + 10} y2={groundY} stroke={trunkColor} strokeWidth="1.2" strokeLinecap="round" opacity="0.4" />
+
+      {/* Roots */}
+      {t > 0.05 && (
+        <>
+          <line x1={cx} y1={groundY} x2={cx - rootSpread} y2={groundY + rootDepth} stroke={trunkColor} strokeWidth="1" strokeLinecap="round" opacity="0.55" />
+          <line x1={cx} y1={groundY} x2={cx + rootSpread} y2={groundY + rootDepth} stroke={trunkColor} strokeWidth="1" strokeLinecap="round" opacity="0.55" />
+        </>
+      )}
+
+      {/* Trunk */}
+      <rect
+        x={cx - trunkW / 2}
+        y={trunkTop}
+        width={trunkW}
+        height={trunkH}
+        rx={trunkW / 2}
+        fill={trunkColor}
+      />
+
+      {/* Canopy */}
+      {canopyPaths}
+
+      {/* Tiny star/sparkle on day 1 */}
+      {day === 1 && (
+        <text x={cx} y={trunkTop - maxCanopyH * canopyScale - 4} textAnchor="middle" fontSize="9" opacity="0.8">✦</text>
+      )}
+
+      {/* Full moon glow on last day */}
+      {day === daysInMonth && (
+        <circle cx={cx} cy={trunkTop - maxCanopyH * canopyScale - 7} r="4" fill="#F1A35A" opacity="0.7" />
+      )}
+    </svg>
+  );
+}
+
 export default function HydroTracker() {
   const [projects, setProjects] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -344,7 +452,10 @@ export default function HydroTracker() {
       <header className="tr-header">
         <div className="tr-title-block">
           <div className="tr-eyebrow">Johnson Barrow &middot; Project Log</div>
-          <h1>Hydro Tracker</h1>
+          <div className="tr-title-row">
+            <h1>Hydro Tracker</h1>
+            <MonthTree />
+          </div>
         </div>
         <div className="tr-header-right">
           <button className="tr-export-btn" onClick={() => { setImportError(""); setShowImport(true); }} title="Import a backup JSON">
@@ -762,6 +873,17 @@ const css = `
   color: var(--copper);
   margin-bottom: 4px;
 }
+.tr-title-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+.tr-month-tree {
+  margin-bottom: 3px;
+  opacity: 0.92;
+  transition: opacity 0.2s;
+}
+.tr-month-tree:hover { opacity: 1; }
 .tr-header h1 {
   font-family: 'Space Grotesk', sans-serif;
   font-size: 30px;
