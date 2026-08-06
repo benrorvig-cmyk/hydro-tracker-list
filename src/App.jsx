@@ -42,6 +42,27 @@ function defaultDueTime() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T16:00`;
 }
 
+// How long a project has sat in its current column. Falls back to updatedAt for
+// projects created before statusChangedAt was tracked.
+function fmtInStatus(p) {
+  const iso = p.statusChangedAt || p.updatedAt;
+  if (!iso) return null;
+  const days = Math.floor((Date.now() - new Date(iso)) / 86400000);
+  if (days < 1) return null;
+  const level = days >= 14 ? "alert" : days >= 7 ? "warn" : "ok";
+  return { days, level, label: `${days}d in stage` };
+}
+
+function dayLabel(dueISO) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const target = new Date(dueISO); target.setHours(0, 0, 0, 0);
+  const diff = Math.round((target - today) / 86400000);
+  if (diff < 0) return "Overdue";
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Tomorrow";
+  return target.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+}
+
 const emptyDraft = () => ({
   id: null,
   title: "",
@@ -53,6 +74,7 @@ const emptyDraft = () => ({
   flagged: false,
   flagReason: "",
   updatedAt: "",
+  statusChangedAt: "",
 });
 
 
@@ -149,9 +171,12 @@ export default function HydroTracker() {
   const confettiRef = useRef(null);
   const [showImport, setShowImport] = useState(false);
   const [importError, setImportError] = useState("");
+  const [focusedCardId, setFocusedCardId] = useState(null);
   const saveTimer = useRef(null);
   const importFileRef = useRef(null);
   const boardSearchRef = useRef(null);
+  const doneSearchRef = useRef(null);
+  const boardColumnsRef = useRef([]);
 
   useEffect(() => {
     const tick = setInterval(() => setNow(new Date()), 60000);
@@ -188,21 +213,97 @@ export default function HydroTracker() {
     return () => clearInterval(poll);
   }, []);
 
-  // Ctrl+F focuses the board search
+  // ── Keyboard shortcuts ──────────────────────────────────────────────
+  const modalOpen = showForm || !!flagTarget || !!confirmTarget || showImport;
+
   useEffect(() => {
     function onKeyDown(e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === "f" && view === "board") {
-        e.preventDefault();
-        boardSearchRef.current?.focus();
-        boardSearchRef.current?.select();
+      const el = e.target;
+      const typing = el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+
+      // Ctrl/Cmd+F → focus whichever search bar this view has
+      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+        const ref = view === "board" ? boardSearchRef : view === "done" ? doneSearchRef : null;
+        if (ref?.current) {
+          e.preventDefault();
+          ref.current.focus();
+          ref.current.select();
+        }
+        return;
       }
+
       if (e.key === "Escape") {
-        setBoardSearch("");
-        boardSearchRef.current?.blur();
+        if (typing) {
+          if (view === "board") { setBoardSearch(""); boardSearchRef.current?.blur(); }
+          if (view === "done") { setDoneSearch(""); doneSearchRef.current?.blur(); }
+        } else {
+          setFocusedCardId(null);
+        }
+        return;
+      }
+
+      // Everything below is a bare letter/arrow shortcut — skip while typing,
+      // while a modal is open, or when a modifier is held.
+      if (typing || modalOpen || e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const key = e.key.toLowerCase();
+
+      if (key === "n") { e.preventDefault(); openNew(); return; }
+
+      if (view !== "board") return;
+
+      const cols = boardColumnsRef.current;
+      const flat = cols.flatMap((c, ci) => c.items.map((p, ri) => ({ id: p.id, ci, ri, p })));
+      if (flat.length === 0) return;
+      const cur = flat.find((x) => x.id === focusedCardId) || null;
+
+      if (key === "e" && cur) { e.preventDefault(); openEdit(cur.p); return; }
+
+      if (key === "m" && cur) {
+        e.preventDefault();
+        const idx = STATUSES.indexOf(cur.p.status);
+        const next = STATUSES[idx + 1];
+        if (next) setStatus(cur.p, next);
+        return;
+      }
+
+      const arrows = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+      if (!arrows.includes(e.key)) return;
+      e.preventDefault();
+
+      if (!cur) { setFocusedCardId(flat[0].id); return; }
+
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        const col = cols[cur.ci].items;
+        const nextRow = cur.ri + (e.key === "ArrowDown" ? 1 : -1);
+        if (nextRow >= 0 && nextRow < col.length) setFocusedCardId(col[nextRow].id);
+        return;
+      }
+
+      // Left/Right: hop columns, keeping roughly the same row, skipping empties
+      const dir = e.key === "ArrowRight" ? 1 : -1;
+      for (let ci = cur.ci + dir; ci >= 0 && ci < cols.length; ci += dir) {
+        const col = cols[ci].items;
+        if (col.length > 0) {
+          setFocusedCardId(col[Math.min(cur.ri, col.length - 1)].id);
+          return;
+        }
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, [view, focusedCardId, modalOpen, projects]);
+
+  // Keep the focused card in view as you arrow around
+  useEffect(() => {
+    if (!focusedCardId) return;
+    document.querySelector(`[data-card-id="${focusedCardId}"]`)
+      ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [focusedCardId]);
+
+  // Card focus only means something on the board
+  useEffect(() => {
+    if (view !== "board") setFocusedCardId(null);
   }, [view]);
 
   const [copiedCode, setCopiedCode] = useState(null);
@@ -214,6 +315,20 @@ export default function HydroTracker() {
     setCopiedCode(code);
     setTimeout(() => setCopiedCode(null), 2000);
     window.open(DYNAMICS_URL, "_blank", "noopener");
+  }
+
+  // Only close a modal when the press AND the release both happen on the
+  // backdrop. Without this, selecting text inside the modal and releasing the
+  // mouse outside it would close the modal and discard the draft.
+  const backdropPressed = useRef(false);
+  function backdropProps(closeFn) {
+    return {
+      onMouseDown: (e) => { backdropPressed.current = e.target === e.currentTarget; },
+      onClick: (e) => {
+        if (e.target === e.currentTarget && backdropPressed.current) closeFn();
+        backdropPressed.current = false;
+      },
+    };
   }
 
   function persist(next) {
@@ -287,9 +402,14 @@ export default function HydroTracker() {
     const dueISO = draft.due ? new Date(draft.due).toISOString() : "";
     const nowISO = new Date().toISOString();
     if (editingId) {
-      persist(projects.map((p) => (p.id === editingId ? { ...draft, due: dueISO, updatedAt: nowISO } : p)));
+      const prev = projects.find((p) => p.id === editingId);
+      const statusChanged = prev && prev.status !== draft.status;
+      if (statusChanged && draft.status === "Done") setConfettiId(editingId);
+      persist(projects.map((p) => (p.id === editingId
+        ? { ...draft, due: dueISO, updatedAt: nowISO, statusChangedAt: statusChanged ? nowISO : (p.statusChangedAt || nowISO) }
+        : p)));
     } else {
-      persist([...projects, { ...draft, due: dueISO, id: uid(), updatedAt: nowISO }]);
+      persist([...projects, { ...draft, due: dueISO, id: uid(), updatedAt: nowISO, statusChangedAt: nowISO }]);
     }
     setShowForm(false);
   }
@@ -331,8 +451,10 @@ export default function HydroTracker() {
   }, [confettiId]);
 
   function setStatus(p, status) {
+    if (status === p.status) return;
     if (status === "Done") setConfettiId(p.id);
-    persist(projects.map((x) => (x.id === p.id ? { ...x, status, updatedAt: new Date().toISOString() } : x)));
+    const nowISO = new Date().toISOString();
+    persist(projects.map((x) => (x.id === p.id ? { ...x, status, updatedAt: nowISO, statusChangedAt: nowISO } : x)));
   }
 
   if (loading || projects === null) {
@@ -348,6 +470,54 @@ export default function HydroTracker() {
   const flaggedUrgent = visibleProjects.filter((p) => {
     const d = fmtDue(p.due);
     return p.flagged || (d && (d.urgent || d.overdue) && p.status !== "Done");
+  });
+
+  // ── Board columns (hoisted so keyboard nav can read the same layout) ──
+  const q = boardSearch.trim().toLowerCase();
+  const boardColumns = BOARD_STATUSES.map((status) => {
+    const rawItems = visibleProjects
+      .filter((p) => p.status === status)
+      .filter((p) => !q
+        || p.title.toLowerCase().includes(q)
+        || (p.notes || "").toLowerCase().includes(q)
+        || (p.projectCode || "").toLowerCase().includes(q));
+    const items = [...rawItems].sort((a, b) => {
+      if (boardSort === "due") {
+        if (!a.due && !b.due) return 0;
+        if (!a.due) return 1;
+        if (!b.due) return -1;
+        return new Date(a.due) - new Date(b.due);
+      }
+      if (boardSort === "updated") {
+        return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+      }
+      return 0; // "added" keeps insertion order
+    });
+    return { status, items };
+  });
+  boardColumnsRef.current = boardColumns;
+
+  // ── Scoreboard: projects closed this calendar month ──────────────────
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const closedThisMonth = projects.filter(
+    (p) => p.status === "Done" && p.updatedAt && new Date(p.updatedAt) >= monthStart
+  );
+  const benScore = closedThisMonth.filter((p) => p.owner === "Ben" || p.owner === "Both").length;
+  const booneScore = closedThisMonth.filter((p) => p.owner === "Boone" || p.owner === "Both").length;
+  const scoreMax = Math.max(benScore, booneScore, 1);
+  const monthName = now.toLocaleDateString(undefined, { month: "long" });
+
+  // ── This Week digest: everything due in the next 7 days, both people ──
+  const weekCutoff = Date.now() + 7 * 86400000;
+  const weekItems = projects
+    .filter((p) => p.status !== "Done" && p.due && new Date(p.due).getTime() <= weekCutoff)
+    .sort((a, b) => new Date(a.due) - new Date(b.due));
+  const weekGroups = [];
+  weekItems.forEach((p) => {
+    const label = dayLabel(p.due);
+    const last = weekGroups[weekGroups.length - 1];
+    if (last && last.label === label) last.items.push(p);
+    else weekGroups.push({ label, items: [p] });
   });
 
   return (
@@ -373,6 +543,31 @@ export default function HydroTracker() {
         </div>
       </header>
 
+      <div className="tr-scorestrip">
+        <div className="tr-scorecard">
+          <div className="tr-scorecard-head">
+            <span className="tr-scorecard-trophy">🏆</span>
+            <span className="tr-scorecard-title">Closed in {monthName}</span>
+            {benScore === booneScore && benScore > 0 && <span className="tr-scorecard-tag">dead heat</span>}
+          </div>
+          {[
+            { name: "Ben", score: benScore },
+            { name: "Boone", score: booneScore },
+          ].map(({ name, score }) => {
+            const leading = score === scoreMax && score > 0;
+            return (
+              <div className={"tr-scorerow" + (leading ? " tr-scorerow-lead" : "")} key={name}>
+                <span className="tr-scorerow-name">{name}</span>
+                <span className="tr-scorebar">
+                  <span className="tr-scorebar-fill" style={{ width: `${(score / scoreMax) * 100}%` }} />
+                </span>
+                <span className="tr-scorerow-num">{score}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {storageError && (
         <div className="tr-errorbar">
           <AlertTriangle size={16} />
@@ -392,6 +587,9 @@ export default function HydroTracker() {
           <div className="tr-tabs">
             <button className={"tr-tab" + (view === "board" ? " tr-tab-active" : "")} onClick={() => setView("board")}>
               Board
+            </button>
+            <button className={"tr-tab" + (view === "week" ? " tr-tab-active" : "")} onClick={() => setView("week")}>
+              This week <span className="tr-count">{weekItems.length}</span>
             </button>
             <button className={"tr-tab" + (view === "done" ? " tr-tab-active" : "")} onClick={() => setView("done")}>
               Done <span className="tr-count">{visibleProjects.filter((p) => p.status === "Done").length}</span>
@@ -440,6 +638,7 @@ export default function HydroTracker() {
           <div className="tr-search">
             <Search size={14} />
             <input
+              ref={doneSearchRef}
               placeholder="Search done projects…"
               value={doneSearch}
               onChange={(e) => setDoneSearch(e.target.value)}
@@ -455,22 +654,7 @@ export default function HydroTracker() {
 
       {view === "board" && (
       <div className="tr-board">
-        {BOARD_STATUSES.map((status) => {
-          const rawItems = visibleProjects
-            .filter((p) => p.status === status)
-            .filter((p) => !boardSearch.trim() || p.title.toLowerCase().includes(boardSearch.trim().toLowerCase()) || (p.notes || "").toLowerCase().includes(boardSearch.trim().toLowerCase()) || (p.projectCode || "").toLowerCase().includes(boardSearch.trim().toLowerCase()));
-          const items = [...rawItems].sort((a, b) => {
-            if (boardSort === "due") {
-              if (!a.due && !b.due) return 0;
-              if (!a.due) return 1;
-              if (!b.due) return -1;
-              return new Date(a.due) - new Date(b.due);
-            }
-            if (boardSort === "updated") {
-              return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
-            }
-            return 0; // "added" keeps insertion order
-          });
+        {boardColumns.map(({ status, items }) => {
           return (
             <div className="tr-column" key={status}>
               <div className="tr-column-head">
@@ -483,9 +667,15 @@ export default function HydroTracker() {
                 {items.map((p) => {
                   const d = fmtDue(p.due);
                   const u = fmtUpdated(p.updatedAt);
+                  const st = fmtInStatus(p);
                   const isBlindSpot = p.flagged || (d && (d.urgent || d.overdue) && p.status !== "Done");
                   return (
-                    <div className={"tr-card" + (isBlindSpot ? " tr-card-flagged" : "")} key={p.id}>
+                    <div
+                      className={"tr-card" + (isBlindSpot ? " tr-card-flagged" : "") + (focusedCardId === p.id ? " tr-card-focused" : "")}
+                      key={p.id}
+                      data-card-id={p.id}
+                      onClick={() => setFocusedCardId(p.id)}
+                    >
                       {isBlindSpot && (
                         <div className="tr-flag-tag">
                           <AlertTriangle size={11} />
@@ -520,6 +710,11 @@ export default function HydroTracker() {
                             {u.rel}
                           </span>
                         )}
+                        {st && (
+                          <span className={"tr-instatus tr-instatus-" + st.level} title={`In "${p.status}" for ${st.days} day${st.days > 1 ? "s" : ""}`}>
+                            {st.days}d
+                          </span>
+                        )}
                         <div className="tr-card-actions">
                           <select
                             value={p.status}
@@ -548,6 +743,61 @@ export default function HydroTracker() {
           );
         })}
       </div>
+      )}
+
+      {view === "week" && (
+        <div className="tr-week">
+          <p className="tr-week-note">
+            Everything due in the next 7 days — both Ben and Boone, regardless of the toggle above.
+          </p>
+          {weekGroups.length === 0 && (
+            <div className="tr-empty tr-empty-lg">Nothing due in the next 7 days.</div>
+          )}
+          {weekGroups.map((g) => (
+            <div className="tr-week-group" key={g.label}>
+              <div className={"tr-week-dayhead" + (g.label === "Overdue" ? " tr-week-dayhead-over" : "")}>
+                {g.label}
+                <span className="tr-count">{g.items.length}</span>
+              </div>
+              {g.items.map((p) => {
+                const d = fmtDue(p.due);
+                const st = fmtInStatus(p);
+                return (
+                  <div className="tr-weekrow" key={p.id}>
+                    <span className="tr-pipe-dot" data-status={p.status} />
+                    <div className="tr-weekrow-main">
+                      <div className="tr-weekrow-title" onClick={() => { setView("board"); setFocusedCardId(p.id); openEdit(p); }}>
+                        {p.title}
+                      </div>
+                      <div className="tr-weekrow-meta">
+                        <span className="tr-owner">
+                          {p.owner === "Both" ? <Users size={12} /> : <User size={12} />}
+                          {p.owner}
+                        </span>
+                        <span className="tr-weekrow-status">{p.status}</span>
+                        {st && <span className={"tr-instatus tr-instatus-" + st.level}>{st.days}d</span>}
+                        {p.projectCode && (
+                          <button
+                            className={"tr-code-badge" + (copiedCode === p.projectCode ? " tr-code-badge-copied" : "")}
+                            onClick={() => openDynamics(p.projectCode)}
+                            title="Open Dynamics 365 — code copied to clipboard"
+                          >
+                            {copiedCode === p.projectCode ? "✓ copied!" : p.projectCode}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {d && (
+                      <span className={"tr-weekrow-due" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}>
+                        {d.label}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
       )}
 
       {view === "done" && (() => {
@@ -597,7 +847,7 @@ export default function HydroTracker() {
       })()}
 
       {showForm && (
-        <div className="tr-modal-backdrop" onClick={() => setShowForm(false)}>
+        <div className="tr-modal-backdrop" {...backdropProps(() => setShowForm(false))}>
           <div className="tr-modal" onClick={(e) => e.stopPropagation()}>
             <div className="tr-modal-head">
               <h2>{editingId ? "Edit project" : "New project"}</h2>
@@ -675,7 +925,7 @@ export default function HydroTracker() {
       )}
 
       {flagTarget && (
-        <div className="tr-modal-backdrop" onClick={() => setFlagTarget(null)}>
+        <div className="tr-modal-backdrop" {...backdropProps(() => setFlagTarget(null))}>
           <div className="tr-modal tr-modal-sm" onClick={(e) => e.stopPropagation()}>
             <div className="tr-modal-head">
               <h2>Flag as blind spot</h2>
@@ -703,7 +953,7 @@ export default function HydroTracker() {
       )}
 
       {confirmTarget && (
-        <div className="tr-modal-backdrop" onClick={() => setConfirmTarget(null)}>
+        <div className="tr-modal-backdrop" {...backdropProps(() => setConfirmTarget(null))}>
           <div className="tr-modal tr-modal-sm" onClick={(e) => e.stopPropagation()}>
             <div className="tr-modal-head">
               <h2>Delete project?</h2>
@@ -723,7 +973,7 @@ export default function HydroTracker() {
       )}
 
       {showImport && (
-        <div className="tr-modal-backdrop" onClick={() => setShowImport(false)}>
+        <div className="tr-modal-backdrop" {...backdropProps(() => setShowImport(false))}>
           <div className="tr-modal tr-modal-sm" onClick={(e) => e.stopPropagation()}>
             <div className="tr-modal-head">
               <h2>Import backup</h2>
@@ -757,7 +1007,10 @@ export default function HydroTracker() {
       {confettiId && <ConfettiBurst />}
 
       <footer className="tr-footer">
-        Shared board — changes sync for everyone with this link.
+        <div>Shared board — changes sync for everyone with this link.</div>
+        <div className="tr-footer-keys">
+          <kbd>N</kbd> new · <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> move focus · <kbd>E</kbd> edit · <kbd>M</kbd> next stage · <kbd>Ctrl</kbd>+<kbd>F</kbd> search
+        </div>
       </footer>
     </div>
   );
@@ -1386,6 +1639,191 @@ const css = `
   opacity: 0.7;
 }
 
+/* ── Scoreboard ──────────────────────────────────── */
+.tr-scorestrip {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 18px;
+}
+.tr-scorecard {
+  background: var(--paper-card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 14px 12px;
+  min-width: 214px;
+  box-shadow: 0 1px 4px rgba(22,35,61,0.04);
+}
+.tr-scorecard-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 9px;
+}
+.tr-scorecard-trophy { font-size: 12px; line-height: 1; }
+.tr-scorecard-title {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tr-scorecard-tag {
+  margin-left: auto;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--copper);
+  background: #FBEFE5;
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+.tr-scorerow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+}
+.tr-scorerow-name {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  width: 40px;
+  flex-shrink: 0;
+}
+.tr-scorerow-lead .tr-scorerow-name { color: var(--ink); }
+.tr-scorebar {
+  flex: 1;
+  height: 7px;
+  background: var(--paper);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.tr-scorebar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--copper-dim);
+  transition: width 0.4s ease;
+}
+.tr-scorerow-lead .tr-scorebar-fill { background: var(--copper); }
+.tr-scorerow-num {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  width: 16px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.tr-scorerow-lead .tr-scorerow-num { color: var(--ink); }
+
+/* ── Card focus ring (keyboard nav) ──────────────── */
+.tr-card-focused {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 2px rgba(22,35,61,0.16);
+}
+
+/* ── Time in status chip ─────────────────────────── */
+.tr-instatus {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  padding: 2px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+  background: var(--paper);
+  color: #9AA5B8;
+  border: 1px solid var(--line);
+}
+.tr-instatus-warn {
+  background: #FBEFE5;
+  color: var(--copper);
+  border-color: #EBD3BE;
+}
+.tr-instatus-alert {
+  background: #FDF0ED;
+  color: var(--alert);
+  border-color: #EAC0B8;
+  font-weight: 600;
+}
+
+/* ── This Week digest ────────────────────────────── */
+.tr-week { max-width: 720px; }
+.tr-week-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+.tr-week-group { margin-bottom: 18px; }
+.tr-week-group:last-child { margin-bottom: 0; }
+.tr-week-dayhead {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 600;
+  font-size: 11.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink);
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--ink);
+  margin-bottom: 8px;
+}
+.tr-week-dayhead-over {
+  color: var(--alert);
+  border-bottom-color: var(--alert);
+}
+.tr-weekrow {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  background: var(--paper-card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 11px 14px;
+  margin-bottom: 6px;
+  transition: box-shadow 0.15s;
+}
+.tr-weekrow:last-child { margin-bottom: 0; }
+.tr-weekrow:hover { box-shadow: 0 1px 6px rgba(22,35,61,0.06); }
+.tr-weekrow-main { flex: 1; min-width: 0; }
+.tr-weekrow-title {
+  font-weight: 600;
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.tr-weekrow-title:hover { color: var(--copper); }
+.tr-weekrow-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.tr-weekrow-meta .tr-owner { display: inline-flex; align-items: center; gap: 4px; }
+.tr-weekrow-meta .tr-code-badge { margin: 0; }
+.tr-weekrow-status {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tr-weekrow-due {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* ── Footer ──────────────────────────────────────── */
 .tr-footer {
   margin-top: 28px;
@@ -1393,7 +1831,32 @@ const css = `
   font-size: 11px;
   color: var(--muted);
   font-family: 'IBM Plex Mono', monospace;
-  opacity: 0.6;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  align-items: center;
+}
+.tr-footer > div:first-child { opacity: 0.6; }
+.tr-footer-keys {
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.75;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.tr-footer-keys kbd {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9.5px;
+  background: var(--paper-card);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 4px;
+  color: var(--ink);
+  margin: 0 1px;
 }
 
 /* ── Confetti canvas ─────────────────────────────── */
