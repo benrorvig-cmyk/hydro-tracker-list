@@ -467,11 +467,6 @@ export default function HydroTracker() {
 
   const visibleProjects = projects.filter((p) => p.owner === activePerson || p.owner === "Both");
 
-  const flaggedUrgent = visibleProjects.filter((p) => {
-    const d = fmtDue(p.due);
-    return p.flagged || (d && (d.urgent || d.overdue) && p.status !== "Done");
-  });
-
   // ── Board columns (hoisted so keyboard nav can read the same layout) ──
   const q = boardSearch.trim().toLowerCase();
   const boardColumns = BOARD_STATUSES.map((status) => {
@@ -547,13 +542,6 @@ export default function HydroTracker() {
         <div className="tr-errorbar">
           <AlertTriangle size={16} />
           <span>{storageError} — check that the database is connected in Vercel.</span>
-        </div>
-      )}
-
-      {flaggedUrgent.length > 0 && (
-        <div className="tr-alertbar">
-          <AlertTriangle size={16} />
-          <span>{flaggedUrgent.length} blind spot{flaggedUrgent.length > 1 ? "s" : ""} need attention</span>
         </div>
       )}
 
@@ -1134,19 +1122,6 @@ const css = `
 .tr-dot-saving { background: var(--copper); }
 
 /* ── Alerts ─────────────────────────────────────── */
-.tr-alertbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: #FDF0ED;
-  border: 1px solid #EAC0B8;
-  color: var(--alert);
-  padding: 10px 14px;
-  font-size: 13px;
-  font-weight: 500;
-  border-radius: 6px;
-  margin-bottom: 16px;
-}
 .tr-errorbar {
   display: flex;
   align-items: center;
