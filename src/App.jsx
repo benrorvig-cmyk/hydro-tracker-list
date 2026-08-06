@@ -543,31 +543,6 @@ export default function HydroTracker() {
         </div>
       </header>
 
-      <div className="tr-scorestrip">
-        <div className="tr-scorecard">
-          <div className="tr-scorecard-head">
-            <span className="tr-scorecard-trophy">🏆</span>
-            <span className="tr-scorecard-title">Closed in {monthName}</span>
-            {benScore === booneScore && benScore > 0 && <span className="tr-scorecard-tag">dead heat</span>}
-          </div>
-          {[
-            { name: "Ben", score: benScore },
-            { name: "Boone", score: booneScore },
-          ].map(({ name, score }) => {
-            const leading = score === scoreMax && score > 0;
-            return (
-              <div className={"tr-scorerow" + (leading ? " tr-scorerow-lead" : "")} key={name}>
-                <span className="tr-scorerow-name">{name}</span>
-                <span className="tr-scorebar">
-                  <span className="tr-scorebar-fill" style={{ width: `${(score / scoreMax) * 100}%` }} />
-                </span>
-                <span className="tr-scorerow-num">{score}</span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
       {storageError && (
         <div className="tr-errorbar">
           <AlertTriangle size={16} />
@@ -588,22 +563,24 @@ export default function HydroTracker() {
             <button className={"tr-tab" + (view === "board" ? " tr-tab-active" : "")} onClick={() => setView("board")}>
               Board
             </button>
-            <button className={"tr-tab" + (view === "week" ? " tr-tab-active" : "")} onClick={() => setView("week")}>
-              This week <span className="tr-count">{weekItems.length}</span>
-            </button>
             <button className={"tr-tab" + (view === "done" ? " tr-tab-active" : "")} onClick={() => setView("done")}>
               Done <span className="tr-count">{visibleProjects.filter((p) => p.status === "Done").length}</span>
             </button>
+            <button className={"tr-tab" + (view === "week" ? " tr-tab-active" : "")} onClick={() => setView("week")}>
+              This week <span className="tr-count">{weekItems.length}</span>
+            </button>
           </div>
-          <button
-            className="tr-person-toggle"
-            onClick={() => setActivePerson(activePerson === "Ben" ? "Boone" : "Ben")}
-            aria-label="Switch whose view you're viewing"
-          >
-            <span className={"tr-person-pill" + (activePerson === "Boone" ? " tr-person-pill-right" : "")} />
-            <span className={activePerson === "Ben" ? "tr-person-active" : ""}>Ben</span>
-            <span className={activePerson === "Boone" ? "tr-person-active" : ""}>Boone</span>
-          </button>
+          {view !== "week" && (
+            <button
+              className="tr-person-toggle"
+              onClick={() => setActivePerson(activePerson === "Ben" ? "Boone" : "Ben")}
+              aria-label="Switch whose view you're viewing"
+            >
+              <span className={"tr-person-pill" + (activePerson === "Boone" ? " tr-person-pill-right" : "")} />
+              <span className={activePerson === "Ben" ? "tr-person-active" : ""}>Ben</span>
+              <span className={activePerson === "Boone" ? "tr-person-active" : ""}>Boone</span>
+            </button>
+          )}
         </div>
         {view === "board" && (
           <div className="tr-toolbar-right">
@@ -747,9 +724,55 @@ export default function HydroTracker() {
 
       {view === "week" && (
         <div className="tr-week">
-          <p className="tr-week-note">
-            Everything due in the next 7 days — both Ben and Boone, regardless of the toggle above.
-          </p>
+          {/* ── Hydronic manifold: monthly throughput ── */}
+          <div className="tr-manifold">
+            <div className="tr-manifold-head">
+              <span className="tr-manifold-gauge" aria-hidden="true">
+                <span className="tr-manifold-needle" style={{ transform: `rotate(${-50 + Math.min((benScore + booneScore) / 20, 1) * 100}deg)` }} />
+              </span>
+              <span className="tr-manifold-title">Monthly throughput</span>
+              <span className="tr-manifold-month">{monthName}</span>
+            </div>
+
+            <div className="tr-manifold-body">
+              {[
+                { name: "Ben", score: benScore },
+                { name: "Boone", score: booneScore },
+              ].map(({ name, score }) => {
+                const leading = score === scoreMax && score > 0;
+                const pct = (score / scoreMax) * 100;
+                return (
+                  <div className={"tr-circuit" + (leading ? " tr-circuit-lead" : "")} key={name}>
+                    <span className="tr-circuit-label">{name}</span>
+                    <span className="tr-pipe">
+                      <span className="tr-pipe-cap tr-pipe-cap-in" />
+                      <span className="tr-pipe-bore">
+                        <span className="tr-pipe-water" style={{ width: `${pct}%` }}>
+                          <span className="tr-pipe-flow" />
+                        </span>
+                        <span className="tr-pipe-ticks" />
+                      </span>
+                      <span className="tr-pipe-cap tr-pipe-cap-out" />
+                    </span>
+                    <span className="tr-circuit-readout">
+                      {score}
+                      {leading && <span className="tr-circuit-lead-dot" title="Leading" />}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="tr-manifold-foot">
+              <span>Projects closed this month</span>
+              {benScore === booneScore && benScore > 0 && <span className="tr-manifold-tag">balanced flow</span>}
+            </div>
+          </div>
+
+          <div className="tr-week-intro">
+            Due in the next 7 days &mdash; Ben and Boone combined.
+          </div>
+
           {weekGroups.length === 0 && (
             <div className="tr-empty tr-empty-lg">Nothing due in the next 7 days.</div>
           )}
@@ -1029,6 +1052,8 @@ const css = `
   --ok: #3F7D5C;
   --alert: #B23A32;
   --muted: #66738C;
+  --water: #3D7EA6;
+  --water-light: #74B4D0;
   font-family: 'IBM Plex Sans', sans-serif;
   background: var(--paper);
   background-image:
@@ -1639,84 +1664,190 @@ const css = `
   opacity: 0.7;
 }
 
-/* ── Scoreboard ──────────────────────────────────── */
-.tr-scorestrip {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 18px;
-}
-.tr-scorecard {
-  background: var(--paper-card);
+/* ── Hydronic manifold scoreboard ────────────────── */
+.tr-manifold {
+  background: linear-gradient(170deg, #FFFFFF 0%, #F7FAFC 100%);
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 11px 14px 12px;
-  min-width: 214px;
+  padding: 15px 18px 14px;
+  margin-bottom: 18px;
   box-shadow: 0 1px 4px rgba(22,35,61,0.04);
+  position: relative;
+  overflow: hidden;
 }
-.tr-scorecard-head {
+.tr-manifold::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--copper) 0%, #D8934F 40%, var(--water) 100%);
+}
+.tr-manifold-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 9px;
+  gap: 8px;
+  margin-bottom: 15px;
 }
-.tr-scorecard-trophy { font-size: 12px; line-height: 1; }
-.tr-scorecard-title {
+.tr-manifold-gauge {
+  position: relative;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  background: var(--paper-card);
+  flex-shrink: 0;
+}
+.tr-manifold-needle {
+  position: absolute;
+  left: 50%; bottom: 50%;
+  width: 1.5px; height: 5.5px;
+  background: var(--copper);
+  border-radius: 1px;
+  transform-origin: bottom center;
+  transition: transform 0.6s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+.tr-manifold-title {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.tr-manifold-month {
+  margin-left: auto;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 9.5px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
 }
-.tr-scorecard-tag {
-  margin-left: auto;
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--copper);
-  background: #FBEFE5;
-  border-radius: 999px;
-  padding: 2px 6px;
+.tr-manifold-body {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
 }
-.tr-scorerow {
+.tr-circuit {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.tr-circuit-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  width: 46px;
+  flex-shrink: 0;
+}
+.tr-circuit-lead .tr-circuit-label { color: var(--ink); }
+
+/* the pipe run */
+.tr-pipe {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.tr-pipe-cap {
+  width: 5px;
+  height: 15px;
+  background: linear-gradient(180deg, #D8A87C, #B5793F 45%, #8E5A2C);
+  flex-shrink: 0;
+}
+.tr-pipe-cap-in { border-radius: 3px 1px 1px 3px; }
+.tr-pipe-cap-out { border-radius: 1px 3px 3px 1px; }
+.tr-pipe-bore {
+  flex: 1;
+  position: relative;
+  height: 11px;
+  background: #E9EEF3;
+  border-top: 1px solid #D3DBE4;
+  border-bottom: 1px solid #D3DBE4;
+  overflow: hidden;
+  min-width: 0;
+}
+.tr-pipe-water {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background: linear-gradient(180deg, var(--water-light), var(--water));
+  transition: width 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+.tr-pipe-water::after {
+  content: "";
+  position: absolute;
+  right: 0; top: 0; bottom: 0;
+  width: 2px;
+  background: rgba(255,255,255,0.55);
+}
+.tr-pipe-flow {
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    115deg,
+    rgba(255,255,255,0.22) 0px,
+    rgba(255,255,255,0.22) 2px,
+    transparent 2px,
+    transparent 9px
+  );
+  background-size: 18px 100%;
+  animation: tr-flow 1.1s linear infinite;
+}
+@keyframes tr-flow { to { background-position: 18px 0; } }
+.tr-pipe-ticks {
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    90deg,
+    transparent 0px,
+    transparent 23px,
+    rgba(22,35,61,0.14) 23px,
+    rgba(22,35,61,0.14) 24px
+  );
+  pointer-events: none;
+}
+.tr-circuit-readout {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--muted);
+  min-width: 30px;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+.tr-circuit-lead .tr-circuit-readout { color: var(--ink); }
+.tr-circuit-lead-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--copper);
+  flex-shrink: 0;
+}
+.tr-manifold-foot {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 5px;
-}
-.tr-scorerow-name {
-  font-size: 11.5px;
-  font-weight: 600;
+  margin-top: 13px;
+  padding-top: 11px;
+  border-top: 1px dashed var(--line);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--muted);
-  width: 40px;
-  flex-shrink: 0;
 }
-.tr-scorerow-lead .tr-scorerow-name { color: var(--ink); }
-.tr-scorebar {
-  flex: 1;
-  height: 7px;
-  background: var(--paper);
+.tr-manifold-tag {
+  margin-left: auto;
+  color: var(--water);
+  background: #E7F1F6;
   border-radius: 999px;
-  overflow: hidden;
+  padding: 2px 7px;
+  letter-spacing: 0.06em;
 }
-.tr-scorebar-fill {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: var(--copper-dim);
-  transition: width 0.4s ease;
-}
-.tr-scorerow-lead .tr-scorebar-fill { background: var(--copper); }
-.tr-scorerow-num {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--muted);
-  width: 16px;
-  text-align: right;
-  flex-shrink: 0;
-}
-.tr-scorerow-lead .tr-scorerow-num { color: var(--ink); }
 
 /* ── Card focus ring (keyboard nav) ──────────────── */
 .tr-card-focused {
@@ -1751,11 +1882,13 @@ const css = `
 
 /* ── This Week digest ────────────────────────────── */
 .tr-week { max-width: 720px; }
-.tr-week-note {
-  font-size: 12px;
+.tr-week-intro {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--muted);
-  margin: 0 0 16px;
-  line-height: 1.5;
+  margin-bottom: 14px;
 }
 .tr-week-group { margin-bottom: 18px; }
 .tr-week-group:last-child { margin-bottom: 0; }
