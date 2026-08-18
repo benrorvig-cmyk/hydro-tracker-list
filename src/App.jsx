@@ -17,9 +17,40 @@ function fmtDue(dueISO) {
   const diffMs = due - now;
   const diffH = diffMs / 3600000;
   const overdue = diffMs < 0;
-  const dateStr = due.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+  const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+  const dayDiff = Math.round((startOfDay(due) - startOfDay(now)) / 86400000);
+
   const timeStr = due.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  return { overdue, urgent: !overdue && diffH <= 2, label: `${dateStr}, ${timeStr}`, diffH };
+  const dateStr = due.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const weekday = due.toLocaleDateString(undefined, { weekday: "short" });
+
+  // Prefer a plain-English day word for anything inside the next week
+  let dayWord;
+  if (dayDiff === 0) dayWord = "Today";
+  else if (dayDiff === 1) dayWord = "Tomorrow";
+  else if (dayDiff === -1) dayWord = "Yesterday";
+  else if (dayDiff > 1 && dayDiff <= 6) dayWord = weekday;
+  else dayWord = dateStr;
+
+  // How late, in plain words
+  let note = null;
+  if (overdue) {
+    const late = Math.abs(dayDiff);
+    note = late === 0 ? "past due" : late === 1 ? "1 day late" : `${late} days late`;
+  }
+
+  return {
+    overdue,
+    urgent: !overdue && diffH <= 24,
+    dayWord,
+    timeStr,
+    dateStr,
+    note,
+    label: `${dayWord}, ${timeStr}`,
+    diffH,
+    dayDiff,
+  };
 }
 
 function fmtUpdated(updatedISO) {
@@ -165,6 +196,7 @@ export default function HydroTracker() {
   const [confirmTarget, setConfirmTarget] = useState(null);
   const [storageError, setStorageError] = useState("");
   const [activePerson, setActivePerson] = useState("Ben"); // Ben | Boone
+  const [weekFilter, setWeekFilter] = useState("Both"); // Ben | Boone | Both
   const [boardSort, setBoardSort] = useState("added"); // added | due | updated
   const [boardSearch, setBoardSearch] = useState("");
   const [confettiId, setConfettiId] = useState(null);
@@ -492,20 +524,11 @@ export default function HydroTracker() {
   });
   boardColumnsRef.current = boardColumns;
 
-  // ── Scoreboard: projects closed this calendar month ──────────────────
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const closedThisMonth = projects.filter(
-    (p) => p.status === "Done" && p.updatedAt && new Date(p.updatedAt) >= monthStart
-  );
-  const benScore = closedThisMonth.filter((p) => p.owner === "Ben" || p.owner === "Both").length;
-  const booneScore = closedThisMonth.filter((p) => p.owner === "Boone" || p.owner === "Both").length;
-  const scoreMax = Math.max(benScore, booneScore, 1);
-  const monthName = now.toLocaleDateString(undefined, { month: "long" });
-
   // ── This Week digest: everything due in the next 7 days, both people ──
   const weekCutoff = Date.now() + 7 * 86400000;
   const weekItems = projects
     .filter((p) => p.status !== "Done" && p.due && new Date(p.due).getTime() <= weekCutoff)
+    .filter((p) => weekFilter === "Both" || p.owner === weekFilter || p.owner === "Both")
     .sort((a, b) => new Date(a.due) - new Date(b.due));
   const weekGroups = [];
   weekItems.forEach((p) => {
@@ -568,6 +591,23 @@ export default function HydroTracker() {
               <span className={activePerson === "Ben" ? "tr-person-active" : ""}>Ben</span>
               <span className={activePerson === "Boone" ? "tr-person-active" : ""}>Boone</span>
             </button>
+          )}
+          {view === "week" && (
+            <div className="tr-seg" role="group" aria-label="Filter this week by owner">
+              <span
+                className="tr-seg-pill"
+                style={{ transform: `translateX(${["Ben", "Boone", "Both"].indexOf(weekFilter) * 54}px)` }}
+              />
+              {["Ben", "Boone", "Both"].map((o) => (
+                <button
+                  key={o}
+                  className={"tr-seg-btn" + (weekFilter === o ? " tr-seg-btn-active" : "")}
+                  onClick={() => setWeekFilter(o)}
+                >
+                  {o}
+                </button>
+              ))}
+            </div>
           )}
         </div>
         {view === "board" && (
@@ -664,7 +704,10 @@ export default function HydroTracker() {
                         </span>
                         {d && (
                           <span className={"tr-due" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}>
-                            <Clock size={12} /> {d.label}
+                            <Clock size={12} />
+                            <span className="tr-due-day">{d.dayWord}</span>
+                            <span className="tr-due-time">{d.timeStr}</span>
+                            {d.note && <span className="tr-due-note">{d.note}</span>}
                           </span>
                         )}
                       </div>
@@ -712,53 +755,8 @@ export default function HydroTracker() {
 
       {view === "week" && (
         <div className="tr-week">
-          {/* ── Hydronic manifold: monthly throughput ── */}
-          <div className="tr-manifold">
-            <div className="tr-manifold-head">
-              <span className="tr-manifold-gauge" aria-hidden="true">
-                <span className="tr-manifold-needle" style={{ transform: `rotate(${-50 + Math.min((benScore + booneScore) / 20, 1) * 100}deg)` }} />
-              </span>
-              <span className="tr-manifold-title">Monthly throughput</span>
-              <span className="tr-manifold-month">{monthName}</span>
-            </div>
-
-            <div className="tr-manifold-body">
-              {[
-                { name: "Ben", score: benScore },
-                { name: "Boone", score: booneScore },
-              ].map(({ name, score }) => {
-                const leading = score === scoreMax && score > 0;
-                const pct = (score / scoreMax) * 100;
-                return (
-                  <div className={"tr-circuit" + (leading ? " tr-circuit-lead" : "")} key={name}>
-                    <span className="tr-circuit-label">{name}</span>
-                    <span className="tr-pipe">
-                      <span className="tr-pipe-cap tr-pipe-cap-in" />
-                      <span className="tr-pipe-bore">
-                        <span className="tr-pipe-water" style={{ width: `${pct}%` }}>
-                          <span className="tr-pipe-flow" />
-                        </span>
-                        <span className="tr-pipe-ticks" />
-                      </span>
-                      <span className="tr-pipe-cap tr-pipe-cap-out" />
-                    </span>
-                    <span className="tr-circuit-readout">
-                      {score}
-                      {leading && <span className="tr-circuit-lead-dot" title="Leading" />}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="tr-manifold-foot">
-              <span>Projects closed this month</span>
-              {benScore === booneScore && benScore > 0 && <span className="tr-manifold-tag">balanced flow</span>}
-            </div>
-          </div>
-
           <div className="tr-week-intro">
-            Due in the next 7 days &mdash; Ben and Boone combined.
+            Due in the next 7 days &mdash; {weekFilter === "Both" ? "Ben and Boone combined" : `${weekFilter}'s projects`}
           </div>
 
           {weekGroups.length === 0 && (
@@ -799,8 +797,9 @@ export default function HydroTracker() {
                       </div>
                     </div>
                     {d && (
-                      <span className={"tr-weekrow-due" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}>
-                        {d.label}
+                      <span className={"tr-weekrow-due" + (d.overdue ? " tr-weekrow-due-over" : d.urgent ? " tr-weekrow-due-urgent" : "")}>
+                        {d.timeStr}
+                        {d.note && <span className="tr-weekrow-due-note">{d.note}</span>}
                       </span>
                     )}
                   </div>
@@ -1040,8 +1039,6 @@ const css = `
   --ok: #3F7D5C;
   --alert: #B23A32;
   --muted: #66738C;
-  --water: #3D7EA6;
-  --water-light: #74B4D0;
   font-family: 'IBM Plex Sans', sans-serif;
   background: var(--paper);
   background-image:
@@ -1210,6 +1207,42 @@ const css = `
   transition: transform 0.2s ease;
 }
 .tr-person-pill-right { transform: translateX(54px); }
+
+/* Three-way segmented filter (This week) */
+.tr-seg {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  background: var(--paper-card);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px;
+  height: 36px;
+}
+.tr-seg-pill {
+  position: absolute;
+  top: 3px; left: 3px; bottom: 3px;
+  width: 54px;
+  background: var(--ink);
+  border-radius: 999px;
+  transition: transform 0.2s ease;
+}
+.tr-seg-btn {
+  position: relative;
+  z-index: 1;
+  width: 54px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 0;
+  line-height: 1;
+  transition: color 0.15s;
+}
+.tr-seg-btn-active { color: var(--paper); }
 .tr-search {
   display: flex;
   align-items: center;
@@ -1388,9 +1421,51 @@ const css = `
   color: var(--muted);
   margin-top: 7px;
 }
-.tr-owner, .tr-due { display: flex; align-items: center; gap: 4px; }
-.tr-due-urgent { color: var(--copper); font-weight: 600; }
-.tr-due-over { color: var(--alert); font-weight: 600; }
+.tr-owner { display: flex; align-items: center; gap: 4px; }
+.tr-due {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  padding: 3px 8px 3px 6px;
+  border-radius: 5px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.tr-due-day {
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+.tr-due-time {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  opacity: 0.85;
+}
+.tr-due-note {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 500;
+  padding-left: 5px;
+  margin-left: 1px;
+  border-left: 1px solid currentColor;
+  opacity: 0.9;
+}
+.tr-due-urgent {
+  background: #FBEFE5;
+  border-color: #EBD3BE;
+  color: var(--copper);
+}
+.tr-due-urgent .tr-due-day { color: var(--copper); }
+.tr-due-over {
+  background: #FDF0ED;
+  border-color: #EAC0B8;
+  color: var(--alert);
+}
+.tr-due-over .tr-due-day { color: var(--alert); }
 .tr-card-notes {
   font-size: 11.5px;
   color: var(--muted);
@@ -1639,191 +1714,6 @@ const css = `
   opacity: 0.7;
 }
 
-/* ── Hydronic manifold scoreboard ────────────────── */
-.tr-manifold {
-  background: linear-gradient(170deg, #FFFFFF 0%, #F7FAFC 100%);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 15px 18px 14px;
-  margin-bottom: 18px;
-  box-shadow: 0 1px 4px rgba(22,35,61,0.04);
-  position: relative;
-  overflow: hidden;
-}
-.tr-manifold::before {
-  content: "";
-  position: absolute;
-  left: 0; right: 0; top: 0;
-  height: 3px;
-  background: linear-gradient(90deg, var(--copper) 0%, #D8934F 40%, var(--water) 100%);
-}
-.tr-manifold-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 15px;
-}
-.tr-manifold-gauge {
-  position: relative;
-  width: 16px; height: 16px;
-  border-radius: 50%;
-  border: 1.5px solid var(--line);
-  background: var(--paper-card);
-  flex-shrink: 0;
-}
-.tr-manifold-needle {
-  position: absolute;
-  left: 50%; bottom: 50%;
-  width: 1.5px; height: 5.5px;
-  background: var(--copper);
-  border-radius: 1px;
-  transform-origin: bottom center;
-  transition: transform 0.6s cubic-bezier(0.3, 1.4, 0.5, 1);
-}
-.tr-manifold-title {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--ink);
-}
-.tr-manifold-month {
-  margin-left: auto;
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 9.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.tr-manifold-body {
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
-}
-.tr-circuit {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.tr-circuit-label {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
-  width: 46px;
-  flex-shrink: 0;
-}
-.tr-circuit-lead .tr-circuit-label { color: var(--ink); }
-
-/* the pipe run */
-.tr-pipe {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-.tr-pipe-cap {
-  width: 5px;
-  height: 15px;
-  background: linear-gradient(180deg, #D8A87C, #B5793F 45%, #8E5A2C);
-  flex-shrink: 0;
-}
-.tr-pipe-cap-in { border-radius: 3px 1px 1px 3px; }
-.tr-pipe-cap-out { border-radius: 1px 3px 3px 1px; }
-.tr-pipe-bore {
-  flex: 1;
-  position: relative;
-  height: 11px;
-  background: #E9EEF3;
-  border-top: 1px solid #D3DBE4;
-  border-bottom: 1px solid #D3DBE4;
-  overflow: hidden;
-  min-width: 0;
-}
-.tr-pipe-water {
-  position: absolute;
-  left: 0; top: 0; bottom: 0;
-  background: linear-gradient(180deg, var(--water-light), var(--water));
-  transition: width 0.7s cubic-bezier(0.4, 0, 0.2, 1);
-  overflow: hidden;
-}
-.tr-pipe-water::after {
-  content: "";
-  position: absolute;
-  right: 0; top: 0; bottom: 0;
-  width: 2px;
-  background: rgba(255,255,255,0.55);
-}
-.tr-pipe-flow {
-  position: absolute;
-  inset: 0;
-  background-image: repeating-linear-gradient(
-    115deg,
-    rgba(255,255,255,0.22) 0px,
-    rgba(255,255,255,0.22) 2px,
-    transparent 2px,
-    transparent 9px
-  );
-  background-size: 18px 100%;
-  animation: tr-flow 1.1s linear infinite;
-}
-@keyframes tr-flow { to { background-position: 18px 0; } }
-.tr-pipe-ticks {
-  position: absolute;
-  inset: 0;
-  background-image: repeating-linear-gradient(
-    90deg,
-    transparent 0px,
-    transparent 23px,
-    rgba(22,35,61,0.14) 23px,
-    rgba(22,35,61,0.14) 24px
-  );
-  pointer-events: none;
-}
-.tr-circuit-readout {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--muted);
-  min-width: 30px;
-  justify-content: flex-end;
-  flex-shrink: 0;
-}
-.tr-circuit-lead .tr-circuit-readout { color: var(--ink); }
-.tr-circuit-lead-dot {
-  width: 5px; height: 5px;
-  border-radius: 50%;
-  background: var(--copper);
-  flex-shrink: 0;
-}
-.tr-manifold-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 13px;
-  padding-top: 11px;
-  border-top: 1px dashed var(--line);
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 9.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.tr-manifold-tag {
-  margin-left: auto;
-  color: var(--water);
-  background: #E7F1F6;
-  border-radius: 999px;
-  padding: 2px 7px;
-  letter-spacing: 0.06em;
-}
-
 /* ── Card focus ring (keyboard nav) ──────────────── */
 .tr-card-focused {
   border-color: var(--ink);
@@ -1925,11 +1815,24 @@ const css = `
   color: var(--muted);
 }
 .tr-weekrow-due {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
   flex-shrink: 0;
+}
+.tr-weekrow-due-urgent { color: var(--copper); font-weight: 500; }
+.tr-weekrow-due-over { color: var(--alert); font-weight: 500; }
+.tr-weekrow-due-note {
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding-left: 6px;
+  border-left: 1px solid currentColor;
+  opacity: 0.9;
 }
 
 /* ── Footer ──────────────────────────────────────── */
