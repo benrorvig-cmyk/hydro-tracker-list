@@ -208,6 +208,10 @@ export default function HydroTracker() {
   const [focusedCardId, setFocusedCardId] = useState(null);
   const [collapsedIds, setCollapsedIds] = useState(() => new Set());
   const [showHelp, setShowHelp] = useState(false);
+  const [draggingId, setDraggingId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
+  const dragState = useRef(null); // { id, status, longPressTimer, started }
+  const justDragged = useRef(false);
   const saveTimer = useRef(null);
   const importFileRef = useRef(null);
   const boardSearchRef = useRef(null);
@@ -398,6 +402,125 @@ export default function HydroTracker() {
     openEdit(p);
   }
 
+  // ── Long-press to drag-reorder cards within a column ────────────────
+  // Press and hold ~450ms to pick a card up, then drag over siblings to
+  // reorder. Releasing commits the new order and switches sort to "Custom".
+  function seedOrderFromCurrent() {
+    // Stamp `order` on each card to match the order currently shown, so
+    // flipping to custom sort keeps the same starting arrangement.
+    const cols = boardColumnsRef.current || [];
+    const orderById = {};
+    cols.forEach(({ items }) => {
+      items.forEach((p, i) => { orderById[p.id] = i; });
+    });
+    setProjects((prev) => prev.map((p) =>
+      orderById[p.id] != null ? { ...p, order: orderById[p.id] } : p
+    ));
+  }
+
+  function reorderWithinStatus(status, draggedId, targetId) {
+    setProjects((prev) => {
+      const inCol = prev.filter((p) => p.status === status);
+      const others = prev.filter((p) => p.status !== status);
+      const from = inCol.findIndex((p) => p.id === draggedId);
+      const to = inCol.findIndex((p) => p.id === targetId);
+      if (from === -1 || to === -1 || from === to) return prev;
+      const next = [...inCol];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      // Stamp a fresh order value on every card in the column
+      next.forEach((p, i) => { p.order = i; });
+      return [...others, ...next];
+    });
+  }
+
+  function commitOrder() {
+    // Persist the latest order (reads current state, avoids stale closure)
+    setBoardSort("custom");
+    setProjects((cur) => {
+      const snapshot = cur.map((p) => ({ ...p }));
+      setSaveState("saving");
+      clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(async () => {
+        try {
+          await saveProjects(snapshot);
+          setSaveState("saved");
+          setStorageError("");
+          setTimeout(() => setSaveState("idle"), 1200);
+        } catch (e) {
+          setSaveState("idle");
+          setStorageError(e.message || "Couldn't save — your last change may not have been kept");
+        }
+      }, 300);
+      return cur;
+    });
+  }
+
+  function cardPointerDown(e, p) {
+    // Only left button / touch, and not on an interactive child
+    if (e.button === 2) return;
+    const startY = e.clientY, startX = e.clientX;
+    dragState.current = { id: p.id, status: p.status, started: false, startX, startY };
+    const timer = setTimeout(() => {
+      if (!dragState.current) return;
+      dragState.current.started = true;
+      setDraggingId(p.id);
+      // Seed order from the current on-screen column order, then switch to
+      // custom sort so live reordering is visible as you drag.
+      seedOrderFromCurrent();
+      setBoardSort("custom");
+      if (navigator.vibrate) navigator.vibrate(15);
+    }, 450);
+    dragState.current.timer = timer;
+
+    const onMove = (ev) => {
+      const ds = dragState.current;
+      if (!ds) return;
+      const cy = ev.clientY ?? ev.touches?.[0]?.clientY;
+      const cx = ev.clientX ?? ev.touches?.[0]?.clientX;
+      if (!ds.started) {
+        // Moved too far before long-press fired → treat as scroll, cancel arm
+        if (Math.abs(cy - ds.startY) > 8 || Math.abs(cx - ds.startX) > 8) {
+          clearTimeout(ds.timer);
+          dragState.current = null;
+          cleanup();
+        }
+        return;
+      }
+      ev.preventDefault();
+      // Find the card under the pointer
+      const el = document.elementFromPoint(cx, cy)?.closest("[data-card-id]");
+      if (el) {
+        const overId = el.getAttribute("data-card-id");
+        const over = projects.find((x) => x.id === overId);
+        if (over && over.status === ds.status && overId !== ds.id) {
+          setDragOverId(overId);
+          reorderWithinStatus(ds.status, ds.id, overId);
+        }
+      }
+    };
+
+    const onUp = () => {
+      const ds = dragState.current;
+      if (ds) {
+        clearTimeout(ds.timer);
+        if (ds.started) { commitOrder(); justDragged.current = true; }
+      }
+      dragState.current = null;
+      setDraggingId(null);
+      setDragOverId(null);
+      cleanup();
+    };
+
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
   // Only close a modal when the press AND the release both happen on the
   // backdrop. Without this, selecting text inside the modal and releasing the
   // mouse outside it would close the modal and discard the draft.
@@ -569,6 +692,9 @@ export default function HydroTracker() {
         || (p.notes || "").toLowerCase().includes(q)
         || (p.projectCode || "").toLowerCase().includes(q));
     const items = [...rawItems].sort((a, b) => {
+      if (boardSort === "custom") {
+        return (a.order ?? 1e9) - (b.order ?? 1e9);
+      }
       if (boardSort === "due") {
         if (!a.due && !b.due) return 0;
         if (!a.due) return 1;
@@ -695,6 +821,7 @@ export default function HydroTracker() {
                 <option value="added">Date added</option>
                 <option value="due">Due date</option>
                 <option value="updated">Last updated</option>
+                <option value="custom">Custom</option>
               </select>
             </div>
             <button className="tr-btn-primary" onClick={openNew}>
@@ -740,161 +867,160 @@ export default function HydroTracker() {
                   const collapsed = collapsedIds.has(p.id);
                   return (
                     <div
-                      className={"tr-card" + (isBlindSpot ? " tr-card-flagged" : "") + (focusedCardId === p.id ? " tr-card-focused" : "") + (collapsed ? " tr-card-collapsed" : "")}
+                      className={"tr-card"
+                        + (isBlindSpot ? " tr-card-flagged" : "")
+                        + (focusedCardId === p.id ? " tr-card-focused" : "")
+                        + (collapsed ? " tr-card-collapsed" : "")
+                        + (draggingId === p.id ? " tr-card-dragging" : "")
+                        + (dragOverId === p.id && draggingId !== p.id ? " tr-card-dragover" : "")}
                       key={p.id}
                       data-card-id={p.id}
-                      onClick={() => handleCardClick(p)}
+                      onPointerDown={(e) => cardPointerDown(e, p)}
+                      onClick={() => {
+                        if (justDragged.current) { justDragged.current = false; return; }
+                        if (!draggingId) handleCardClick(p);
+                      }}
                       onDoubleClick={() => handleCardDouble(p)}
-                      title={collapsed ? "Click to expand · double-click to edit" : "Click to collapse · double-click to edit"}
+                      title={collapsed ? "Click to expand · double-click to edit · hold to reorder" : "Click to collapse · double-click to edit · hold to reorder"}
                     >
-                      {collapsed ? (
-                        <div className="tr-card-oneline">
-                          {isBlindSpot && (
-                            <span
-                              className="tr-flag-dot"
-                              title={p.flagged ? p.flagReason : d && d.overdue ? "Overdue" : "Due soon"}
-                            >
-                              <AlertTriangle size={12} />
-                            </span>
-                          )}
-                          <span className="tr-oneline-titlewrap">
-                            <span
-                              className={"tr-oneline-title" + (copiedField === `${p.id}:title` ? " tr-copied" : "")}
-                              onClick={(e) => { e.stopPropagation(); copyToClipboard(p.title, `${p.id}:title`); }}
-                              title="Click to copy title"
-                            >
-                              {p.title}
-                            </span>
-                            {copiedField === `${p.id}:title` && <span className="tr-copy-flash"><Check size={11} /> Copied</span>}
+                      {/* Always-visible summary line */}
+                      <div className="tr-card-oneline">
+                        {isBlindSpot && (
+                          <span
+                            className="tr-flag-dot"
+                            title={p.flagged ? p.flagReason : d && d.overdue ? "Overdue" : "Due soon"}
+                          >
+                            <AlertTriangle size={12} />
                           </span>
-                          {d && (
-                            <span className={"tr-due tr-due-mini" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}>
-                              <Clock size={11} />
-                              <span className="tr-due-day">{d.dayWord}</span>
-                              <span className="tr-due-time">{d.timeStr}</span>
-                            </span>
-                          )}
-                        </div>
-                      ) : (
-                      <>
-                      {isBlindSpot && (
-                        <div className="tr-flag-tag">
-                          <AlertTriangle size={11} />
-                          {p.flagged ? p.flagReason : d.overdue ? "Overdue" : "Due soon"}
-                        </div>
-                      )}
-                      <div className="tr-card-title">
-                        <span
-                          className={"tr-card-title-text" + (copiedField === `${p.id}:title` ? " tr-copied" : "")}
-                          onClick={(e) => { e.stopPropagation(); copyToClipboard(p.title, `${p.id}:title`); }}
-                          title="Click to copy title"
-                        >
-                          {p.title}
+                        )}
+                        <span className="tr-oneline-titlewrap">
+                          <span
+                            className={"tr-oneline-title" + (copiedField === `${p.id}:title` ? " tr-copied" : "")}
+                            onClick={(e) => { e.stopPropagation(); copyToClipboard(p.title, `${p.id}:title`); }}
+                            title="Click to copy title"
+                          >
+                            {p.title}
+                          </span>
+                          {copiedField === `${p.id}:title`
+                            ? <span className="tr-copy-flash"><Check size={11} /> Copied</span>
+                            : <span className="tr-copy-hint tr-copy-hint-expanded"><Copy size={11} /></span>}
                         </span>
-                        {copiedField === `${p.id}:title`
-                          ? <span className="tr-copy-flash"><Check size={11} /> Copied</span>
-                          : <span className="tr-copy-hint"><Copy size={11} /></span>}
+                        {collapsed && d && (
+                          <span className={"tr-due tr-due-mini" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}>
+                            <Clock size={11} />
+                            <span className="tr-due-day">{d.dayWord}</span>
+                            <span className="tr-due-time">{d.timeStr}</span>
+                          </span>
+                        )}
                       </div>
 
-                      {p.projectCode && (
-                        <button
-                          className={"tr-code-badge" + (copiedField === `${p.id}:code` ? " tr-code-badge-copied" : "")}
-                          onClick={(e) => { e.stopPropagation(); copyCode(p.projectCode, p.id); }}
-                          title="Click to copy project number"
-                        >
-                          {copiedField === `${p.id}:code`
-                            ? <><Check size={11} /> Copied</>
-                            : p.projectCode}
-                        </button>
-                      )}
-                      <div className="tr-card-meta">
-                        <span className="tr-owner">
-                          {p.owner === "Both" ? <Users size={12} /> : <User size={12} />}
-                          {p.owner}
-                        </span>
-                        {d ? (
-                          <span className="tr-due-wrap" onClick={(e) => e.stopPropagation()}>
+                      {/* Expandable body — animates open/closed */}
+                      <div className={"tr-card-collapse" + (collapsed ? " tr-card-collapse-closed" : "")} aria-hidden={collapsed}>
+                        <div className="tr-card-collapse-inner">
+                          {p.projectCode && (
                             <button
-                              className={"tr-due tr-due-btn" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}
-                              onClick={(e) => {
-                                const input = e.currentTarget.parentElement.querySelector("input");
-                                input.focus();
-                                try { input.showPicker?.(); } catch { input.click(); }
-                              }}
-                              title="Click to change due date"
+                              className={"tr-code-badge" + (copiedField === `${p.id}:code` ? " tr-code-badge-copied" : "")}
+                              onClick={(e) => { e.stopPropagation(); copyCode(p.projectCode, p.id); }}
+                              title="Click to copy project number"
+                              tabIndex={collapsed ? -1 : 0}
                             >
-                              <Clock size={12} />
-                              <span className="tr-due-day">{d.dayWord}</span>
-                              <span className="tr-due-time">{d.timeStr}</span>
-                              {d.note && <span className="tr-due-note">{d.note}</span>}
+                              {copiedField === `${p.id}:code`
+                                ? <><Check size={11} /> Copied</>
+                                : p.projectCode}
                             </button>
-                            <input
-                              type="date"
-                              className="tr-due-hidden"
-                              value={p.due ? p.due.slice(0, 10) : ""}
-                              onChange={(e) => { setDue(p, e.target.value); e.target.blur(); }}
-                              tabIndex={-1}
-                              aria-label="Change due date"
-                            />
-                          </span>
-                        ) : (
-                          <span className="tr-due-wrap" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              className="tr-due tr-due-btn tr-due-empty"
-                              onClick={(e) => {
-                                const input = e.currentTarget.parentElement.querySelector("input");
-                                input.focus();
-                                try { input.showPicker?.(); } catch { input.click(); }
-                              }}
-                              title="Set a due date"
-                            >
-                              <Clock size={12} /> Set due date
-                            </button>
-                            <input
-                              type="date"
-                              className="tr-due-hidden"
-                              value=""
-                              onChange={(e) => { setDue(p, e.target.value); e.target.blur(); }}
-                              tabIndex={-1}
-                              aria-label="Set due date"
-                            />
-                          </span>
-                        )}
-                      </div>
-                      {p.notes && <div className="tr-card-notes">{p.notes}</div>}
-                      <div className="tr-card-footer">
-                        {u && (
-                          <span className={"tr-updated" + (u.diffDays >= 5 ? " tr-updated-stale" : "")}>
-                            {u.rel}
-                          </span>
-                        )}
-                        {st && (
-                          <span className={"tr-instatus tr-instatus-" + st.level} title={`In "${p.status}" for ${st.days} day${st.days > 1 ? "s" : ""}`}>
-                            {st.days}d
-                          </span>
-                        )}
-                        <div className="tr-card-actions" onClick={(e) => e.stopPropagation()}>
-                          <select
-                            value={p.status}
-                            onChange={(e) => setStatus(p, e.target.value)}
-                            className="tr-status-select"
-                          >
-                            {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-                          </select>
-                          <button
-                            className={"tr-icon-btn tr-flag-btn" + (p.flagged ? " tr-flag-btn-on" : "")}
-                            onClick={() => toggleFlag(p)}
-                            title={p.flagged ? "Unflag" : "Mark as blind spot"}
-                          >
-                            {p.flagged ? <Check size={13} /> : <AlertTriangle size={13} />}
-                          </button>
-                          <button className="tr-icon-btn tr-del-btn" onClick={() => requestDelete(p)} title="Delete">
-                            <X size={13} />
-                          </button>
+                          )}
+                          <div className="tr-card-meta">
+                            <span className="tr-owner">
+                              {p.owner === "Both" ? <Users size={12} /> : <User size={12} />}
+                              {p.owner}
+                            </span>
+                            {d ? (
+                              <span className="tr-due-wrap" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  className={"tr-due tr-due-btn" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}
+                                  onClick={(e) => {
+                                    const input = e.currentTarget.parentElement.querySelector("input");
+                                    input.focus();
+                                    try { input.showPicker?.(); } catch { input.click(); }
+                                  }}
+                                  title="Click to change due date"
+                                  tabIndex={collapsed ? -1 : 0}
+                                >
+                                  <Clock size={12} />
+                                  <span className="tr-due-day">{d.dayWord}</span>
+                                  <span className="tr-due-time">{d.timeStr}</span>
+                                  {d.note && <span className="tr-due-note">{d.note}</span>}
+                                </button>
+                                <input
+                                  type="date"
+                                  className="tr-due-hidden"
+                                  value={p.due ? p.due.slice(0, 10) : ""}
+                                  onChange={(e) => { setDue(p, e.target.value); e.target.blur(); }}
+                                  tabIndex={-1}
+                                  aria-label="Change due date"
+                                />
+                              </span>
+                            ) : (
+                              <span className="tr-due-wrap" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  className="tr-due tr-due-btn tr-due-empty"
+                                  onClick={(e) => {
+                                    const input = e.currentTarget.parentElement.querySelector("input");
+                                    input.focus();
+                                    try { input.showPicker?.(); } catch { input.click(); }
+                                  }}
+                                  title="Set a due date"
+                                  tabIndex={collapsed ? -1 : 0}
+                                >
+                                  <Clock size={12} /> Set due date
+                                </button>
+                                <input
+                                  type="date"
+                                  className="tr-due-hidden"
+                                  value=""
+                                  onChange={(e) => { setDue(p, e.target.value); e.target.blur(); }}
+                                  tabIndex={-1}
+                                  aria-label="Set due date"
+                                />
+                              </span>
+                            )}
+                          </div>
+                          {p.notes && <div className="tr-card-notes">{p.notes}</div>}
+                          <div className="tr-card-footer">
+                            {u && (
+                              <span className={"tr-updated" + (u.diffDays >= 5 ? " tr-updated-stale" : "")}>
+                                {u.rel}
+                              </span>
+                            )}
+                            {st && (
+                              <span className={"tr-instatus tr-instatus-" + st.level} title={`In "${p.status}" for ${st.days} day${st.days > 1 ? "s" : ""}`}>
+                                {st.days}d
+                              </span>
+                            )}
+                            <div className="tr-card-actions" onClick={(e) => e.stopPropagation()}>
+                              <select
+                                value={p.status}
+                                onChange={(e) => setStatus(p, e.target.value)}
+                                className="tr-status-select"
+                                tabIndex={collapsed ? -1 : 0}
+                              >
+                                {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                              </select>
+                              <button
+                                className={"tr-icon-btn tr-flag-btn" + (p.flagged ? " tr-flag-btn-on" : "")}
+                                onClick={() => toggleFlag(p)}
+                                title={p.flagged ? "Unflag" : "Mark as blind spot"}
+                                tabIndex={collapsed ? -1 : 0}
+                              >
+                                {p.flagged ? <Check size={13} /> : <AlertTriangle size={13} />}
+                              </button>
+                              <button className="tr-icon-btn tr-del-btn" onClick={() => requestDelete(p)} title="Delete" tabIndex={collapsed ? -1 : 0}>
+                                <X size={13} />
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                      </>
-                      )}
                     </div>
                   );
                 })}
@@ -1619,12 +1745,44 @@ const css = `
   background: var(--paper-card);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 13px 14px 11px;
+  padding: 12px 14px;
   position: relative;
   cursor: pointer;
+  transition: box-shadow 0.35s ease, border-color 0.35s ease, transform 0.12s ease, opacity 0.15s ease;
+  touch-action: pan-y;
 }
 .tr-card:hover { box-shadow: 0 2px 8px rgba(22,35,61,0.07); }
-.tr-card-collapsed { padding: 10px 14px; }
+
+/* Slide-open / slide-closed animation via grid rows */
+.tr-card-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.22s ease, margin-top 0.28s ease;
+  opacity: 1;
+  margin-top: 9px;
+}
+.tr-card-collapse-closed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  margin-top: 0;
+}
+.tr-card-collapse-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Drag-to-reorder states */
+.tr-card-dragging {
+  opacity: 0.55;
+  box-shadow: 0 8px 24px rgba(22,35,61,0.18);
+  cursor: grabbing;
+  transform: scale(1.02);
+  z-index: 5;
+}
+.tr-card-dragover {
+  box-shadow: 0 0 0 2px var(--copper);
+}
+
 .tr-card-oneline {
   display: flex;
   align-items: center;
@@ -1648,7 +1806,7 @@ const css = `
   min-width: 0;
   max-width: 100%;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 13.5px;
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
@@ -1658,6 +1816,8 @@ const css = `
 }
 .tr-oneline-title:hover { color: var(--copper); }
 .tr-oneline-title.tr-copied { color: var(--ok); }
+.tr-copy-hint-expanded { opacity: 0; }
+.tr-card-oneline:hover .tr-copy-hint-expanded { opacity: 0.55; }
 .tr-card-flagged {
   border-color: var(--alert);
   border-left: 3px solid var(--alert);
@@ -2155,9 +2315,6 @@ const css = `
 }
 
 /* ── Card focus ring (keyboard nav, fades after 5s) ── */
-.tr-card {
-  transition: box-shadow 0.35s ease, border-color 0.35s ease;
-}
 .tr-card-focused {
   border-color: var(--ink);
   box-shadow: 0 0 0 2px rgba(22,35,61,0.18), 0 2px 10px rgba(22,35,61,0.08);
