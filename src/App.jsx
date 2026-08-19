@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Plus, X, AlertTriangle, Clock, Check, User, Users, ChevronDown, Loader2, Search, ArrowLeft } from "lucide-react";
+import { Plus, X, AlertTriangle, Clock, Check, User, Users, ChevronDown, Loader2, Search, ArrowLeft, Copy, Pencil } from "lucide-react";
 import { getProjects, saveProjects } from "./storage";
 
 const STATUSES = ["Not started", "In progress", "Waiting on reply", "Done"];
@@ -186,6 +186,8 @@ export default function HydroTracker() {
   const [loading, setLoading] = useState(true);
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
   const [showForm, setShowForm] = useState(false);
+  const [formFocus, setFormFocus] = useState(null); // which field to auto-open, e.g. "due"
+  const dueInputRef = useRef(null);
   const [draft, setDraft] = useState(emptyDraft());
   const [editingId, setEditingId] = useState(null);
   const [now, setNow] = useState(new Date());
@@ -248,6 +250,16 @@ export default function HydroTracker() {
   // ── Keyboard shortcuts ──────────────────────────────────────────────
   const modalOpen = showForm || !!flagTarget || !!confirmTarget || showImport;
 
+  // Keyboard focus ring should fade after 5s of no keyboard navigation, so a
+  // card isn't left permanently outlined. Mouse clicks set focus without the
+  // ring (see card onClick), keyboard nav sets it with the ring + fade timer.
+  const fadeTimer = useRef(null);
+  function focusByKeyboard(id) {
+    setFocusedCardId(id);
+    clearTimeout(fadeTimer.current);
+    if (id) fadeTimer.current = setTimeout(() => setFocusedCardId(null), 5000);
+  }
+
   useEffect(() => {
     function onKeyDown(e) {
       const el = e.target;
@@ -269,7 +281,7 @@ export default function HydroTracker() {
           if (view === "board") { setBoardSearch(""); boardSearchRef.current?.blur(); }
           if (view === "done") { setDoneSearch(""); doneSearchRef.current?.blur(); }
         } else {
-          setFocusedCardId(null);
+          focusByKeyboard(null);
         }
         return;
       }
@@ -303,12 +315,12 @@ export default function HydroTracker() {
       if (!arrows.includes(e.key)) return;
       e.preventDefault();
 
-      if (!cur) { setFocusedCardId(flat[0].id); return; }
+      if (!cur) { focusByKeyboard(flat[0].id); return; }
 
       if (e.key === "ArrowUp" || e.key === "ArrowDown") {
         const col = cols[cur.ci].items;
         const nextRow = cur.ri + (e.key === "ArrowDown" ? 1 : -1);
-        if (nextRow >= 0 && nextRow < col.length) setFocusedCardId(col[nextRow].id);
+        if (nextRow >= 0 && nextRow < col.length) focusByKeyboard(col[nextRow].id);
         return;
       }
 
@@ -317,7 +329,7 @@ export default function HydroTracker() {
       for (let ci = cur.ci + dir; ci >= 0 && ci < cols.length; ci += dir) {
         const col = cols[ci].items;
         if (col.length > 0) {
-          setFocusedCardId(col[Math.min(cur.ri, col.length - 1)].id);
+          focusByKeyboard(col[Math.min(cur.ri, col.length - 1)].id);
           return;
         }
       }
@@ -335,18 +347,28 @@ export default function HydroTracker() {
 
   // Card focus only means something on the board
   useEffect(() => {
-    if (view !== "board") setFocusedCardId(null);
+    if (view !== "board") { clearTimeout(fadeTimer.current); setFocusedCardId(null); }
   }, [view]);
 
-  const [copiedCode, setCopiedCode] = useState(null);
+  // When the form opens via a due-date click, jump straight to the calendar
+  useEffect(() => {
+    if (showForm && formFocus === "due" && dueInputRef.current) {
+      const el = dueInputRef.current;
+      el.focus();
+      try { el.showPicker?.(); } catch { /* picker not supported; focus is enough */ }
+    }
+  }, [showForm, formFocus]);
 
-  const DYNAMICS_URL = "https://aellc.crm.dynamics.com/main.aspx?appid=134bf34e-1fd8-ef11-8eea-6045bdd871bf&forceUCI=1&pagetype=entitylist&etn=ae_project&viewid=f6702143-650b-45d3-9cec-d49d8bebbdb5&viewType=1039";
+  const [copiedField, setCopiedField] = useState(null); // `${id}:title` | `${id}:code`
 
-  function openDynamics(code) {
-    navigator.clipboard.writeText(code).catch(() => {});
-    setCopiedCode(code);
-    setTimeout(() => setCopiedCode(null), 2000);
-    window.open(DYNAMICS_URL, "_blank", "noopener");
+  function copyToClipboard(text, fieldKey) {
+    navigator.clipboard.writeText(text).catch(() => {});
+    setCopiedField(fieldKey);
+    setTimeout(() => setCopiedField((cur) => (cur === fieldKey ? null : cur)), 1400);
+  }
+
+  function copyCode(code, id) {
+    copyToClipboard(code, `${id}:code`);
   }
 
   // Only close a modal when the press AND the release both happen on the
@@ -420,12 +442,14 @@ export default function HydroTracker() {
   function openNew() {
     setDraft({ ...emptyDraft(), due: defaultDueTime(), owner: activePerson });
     setEditingId(null);
+    setFormFocus(null);
     setShowForm(true);
   }
 
-  function openEdit(p) {
+  function openEdit(p, focusField = null) {
     setDraft({ ...p, due: p.due ? p.due.slice(0, 16) : "" });
     setEditingId(p.id);
+    setFormFocus(focusField);
     setShowForm(true);
   }
 
@@ -679,7 +703,6 @@ export default function HydroTracker() {
                       className={"tr-card" + (isBlindSpot ? " tr-card-flagged" : "") + (focusedCardId === p.id ? " tr-card-focused" : "")}
                       key={p.id}
                       data-card-id={p.id}
-                      onClick={() => setFocusedCardId(p.id)}
                     >
                       {isBlindSpot && (
                         <div className="tr-flag-tag">
@@ -687,14 +710,21 @@ export default function HydroTracker() {
                           {p.flagged ? p.flagReason : d.overdue ? "Overdue" : "Due soon"}
                         </div>
                       )}
-                      <div className="tr-card-title" onClick={() => openEdit(p)}>{p.title}</div>
+                      <div
+                        className={"tr-card-title" + (copiedField === `${p.id}:title` ? " tr-copied" : "")}
+                        onClick={() => copyToClipboard(p.title, `${p.id}:title`)}
+                        title="Click to copy title"
+                      >
+                        <span className="tr-card-title-text">{p.title}</span>
+                        <span className="tr-copy-hint">{copiedField === `${p.id}:title` ? "copied" : <Copy size={11} />}</span>
+                      </div>
                       {p.projectCode && (
                         <button
-                          className={"tr-code-badge" + (copiedCode === p.projectCode ? " tr-code-badge-copied" : "")}
-                          onClick={() => openDynamics(p.projectCode)}
-                          title="Open Dynamics 365 — code copied to clipboard"
+                          className={"tr-code-badge" + (copiedField === `${p.id}:code` ? " tr-code-badge-copied" : "")}
+                          onClick={() => copyCode(p.projectCode, p.id)}
+                          title="Click to copy project number"
                         >
-                          {copiedCode === p.projectCode ? "✓ copied!" : p.projectCode}
+                          {copiedField === `${p.id}:code` ? "✓ copied!" : p.projectCode}
                         </button>
                       )}
                       <div className="tr-card-meta">
@@ -702,13 +732,21 @@ export default function HydroTracker() {
                           {p.owner === "Both" ? <Users size={12} /> : <User size={12} />}
                           {p.owner}
                         </span>
-                        {d && (
-                          <span className={"tr-due" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}>
+                        {d ? (
+                          <button
+                            className={"tr-due tr-due-btn" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}
+                            onClick={() => openEdit(p, "due")}
+                            title="Click to change due date"
+                          >
                             <Clock size={12} />
                             <span className="tr-due-day">{d.dayWord}</span>
                             <span className="tr-due-time">{d.timeStr}</span>
                             {d.note && <span className="tr-due-note">{d.note}</span>}
-                          </span>
+                          </button>
+                        ) : (
+                          <button className="tr-due tr-due-btn tr-due-empty" onClick={() => openEdit(p, "due")} title="Set a due date">
+                            <Clock size={12} /> Set due date
+                          </button>
                         )}
                       </div>
                       {p.notes && <div className="tr-card-notes">{p.notes}</div>}
@@ -731,14 +769,17 @@ export default function HydroTracker() {
                           >
                             {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                           </select>
+                          <button className="tr-icon-btn tr-edit-btn" onClick={() => openEdit(p)} title="Edit project">
+                            <Pencil size={13} />
+                          </button>
                           <button
-                            className={"tr-flag-btn" + (p.flagged ? " tr-flag-btn-on" : "")}
+                            className={"tr-icon-btn tr-flag-btn" + (p.flagged ? " tr-flag-btn-on" : "")}
                             onClick={() => toggleFlag(p)}
                             title={p.flagged ? "Unflag" : "Mark as blind spot"}
                           >
                             {p.flagged ? <Check size={13} /> : <AlertTriangle size={13} />}
                           </button>
-                          <button className="tr-del-btn" onClick={() => requestDelete(p)} title="Delete">
+                          <button className="tr-icon-btn tr-del-btn" onClick={() => requestDelete(p)} title="Delete">
                             <X size={13} />
                           </button>
                         </div>
@@ -775,7 +816,7 @@ export default function HydroTracker() {
                   <div className="tr-weekrow" key={p.id}>
                     <span className="tr-pipe-dot" data-status={p.status} />
                     <div className="tr-weekrow-main">
-                      <div className="tr-weekrow-title" onClick={() => { setView("board"); setFocusedCardId(p.id); openEdit(p); }}>
+                      <div className="tr-weekrow-title" onClick={() => { setView("board"); openEdit(p); }}>
                         {p.title}
                       </div>
                       <div className="tr-weekrow-meta">
@@ -787,11 +828,11 @@ export default function HydroTracker() {
                         {st && <span className={"tr-instatus tr-instatus-" + st.level}>{st.days}d</span>}
                         {p.projectCode && (
                           <button
-                            className={"tr-code-badge" + (copiedCode === p.projectCode ? " tr-code-badge-copied" : "")}
-                            onClick={() => openDynamics(p.projectCode)}
-                            title="Open Dynamics 365 — code copied to clipboard"
+                            className={"tr-code-badge" + (copiedField === `${p.id}:code` ? " tr-code-badge-copied" : "")}
+                            onClick={() => copyCode(p.projectCode, p.id)}
+                            title="Click to copy project number"
                           >
-                            {copiedCode === p.projectCode ? "✓ copied!" : p.projectCode}
+                            {copiedField === `${p.id}:code` ? "✓ copied!" : p.projectCode}
                           </button>
                         )}
                       </div>
@@ -837,16 +878,16 @@ export default function HydroTracker() {
                       {u && <span>Completed {u.dateStr} &middot; {u.rel}</span>}
                       {p.projectCode && (
                         <button
-                          className={"tr-code-badge" + (copiedCode === p.projectCode ? " tr-code-badge-copied" : "")}
-                          onClick={() => openDynamics(p.projectCode)}
-                          title="Open Dynamics 365 — code copied to clipboard"
+                          className={"tr-code-badge" + (copiedField === `${p.id}:code` ? " tr-code-badge-copied" : "")}
+                          onClick={() => copyCode(p.projectCode, p.id)}
+                          title="Click to copy project number"
                         >
-                          {copiedCode === p.projectCode ? "✓ copied!" : p.projectCode}
+                          {copiedField === `${p.id}:code` ? "✓ copied!" : p.projectCode}
                         </button>
                       )}
                     </div>
                   </div>
-                  <button className="tr-del-btn" onClick={() => requestDelete(p)} title="Delete">
+                  <button className="tr-icon-btn tr-del-btn" onClick={() => requestDelete(p)} title="Delete">
                     <X size={14} />
                   </button>
                 </div>
@@ -904,11 +945,32 @@ export default function HydroTracker() {
               </label>
               <label className="tr-field">
                 <span>Due</span>
-                <input
-                  type="datetime-local"
-                  value={draft.due}
-                  onChange={(e) => setDraft({ ...draft, due: e.target.value })}
-                />
+                <div className="tr-due-inputs">
+                  <input
+                    ref={dueInputRef}
+                    type="date"
+                    className="tr-date-input"
+                    value={draft.due ? draft.due.slice(0, 10) : ""}
+                    onChange={(e) => {
+                      const date = e.target.value;
+                      const time = draft.due && draft.due.length >= 16 ? draft.due.slice(11, 16) : "16:00";
+                      setDraft({ ...draft, due: date ? `${date}T${time}` : "" });
+                      // Collapse the calendar the moment a day is chosen
+                      e.target.blur();
+                    }}
+                  />
+                  <input
+                    type="time"
+                    className="tr-time-input"
+                    value={draft.due && draft.due.length >= 16 ? draft.due.slice(11, 16) : ""}
+                    onChange={(e) => {
+                      const time = e.target.value;
+                      const date = draft.due ? draft.due.slice(0, 10) : new Date().toISOString().slice(0, 10);
+                      setDraft({ ...draft, due: time ? `${date}T${time}` : draft.due });
+                    }}
+                    disabled={!draft.due}
+                  />
+                </div>
               </label>
             </div>
             <label className="tr-field">
@@ -1363,7 +1425,6 @@ const css = `
   border-radius: 8px;
   padding: 13px 14px 11px;
   position: relative;
-  transition: box-shadow 0.15s;
 }
 .tr-card:hover { box-shadow: 0 2px 8px rgba(22,35,61,0.07); }
 .tr-card-flagged {
@@ -1385,14 +1446,35 @@ const css = `
   margin-bottom: 9px;
 }
 .tr-card-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
   font-weight: 600;
   font-size: 13.5px;
   cursor: pointer;
   line-height: 1.4;
-  margin-bottom: 0;
+  color: var(--ink);
   transition: color 0.15s;
 }
+.tr-card-title-text { min-width: 0; }
+.tr-copy-hint {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
 .tr-card-title:hover { color: var(--copper); }
+.tr-card-title:hover .tr-copy-hint { opacity: 0.6; color: var(--copper); }
+.tr-card-title.tr-copied { color: var(--ok); }
+.tr-card-title.tr-copied .tr-copy-hint { opacity: 1; color: var(--ok); }
 .tr-code-badge {
   display: inline-flex;
   align-items: center;
@@ -1403,36 +1485,41 @@ const css = `
   background: #EEF3FA;
   color: #3A5A8C;
   border: 1px solid #C8D8EE;
-  border-radius: 4px;
-  padding: 2px 7px;
+  border-radius: 5px;
+  padding: 3px 8px;
   cursor: pointer;
-  margin: 6px 0 2px;
+  margin: 8px 0 0;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
   white-space: nowrap;
 }
-.tr-code-badge:hover { background: var(--ink); color: #E8F0FF; border-color: var(--ink); }
+.tr-code-badge:hover { background: #DEE9F6; color: var(--ink); border-color: #A9C3E4; }
 .tr-code-badge-copied { background: var(--ok) !important; color: #fff !important; border-color: var(--ok) !important; }
 .tr-card-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   font-size: 11.5px;
   color: var(--muted);
-  margin-top: 7px;
+  margin-top: 9px;
 }
-.tr-owner { display: flex; align-items: center; gap: 4px; }
+.tr-owner { display: flex; align-items: center; gap: 5px; font-weight: 500; }
 .tr-due {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   font-size: 11.5px;
-  padding: 3px 8px 3px 6px;
-  border-radius: 5px;
+  font-family: inherit;
+  padding: 4px 8px 4px 7px;
+  border-radius: 6px;
   background: var(--paper);
   border: 1px solid var(--line);
   color: var(--muted);
 }
+.tr-due-btn { cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.tr-due-btn:hover { border-color: var(--ink); }
+.tr-due-empty { color: var(--muted); font-style: normal; }
+.tr-due-empty:hover { color: var(--ink); }
 .tr-due-day {
   font-weight: 600;
   color: var(--ink);
@@ -1449,8 +1536,7 @@ const css = `
   letter-spacing: 0.05em;
   text-transform: uppercase;
   font-weight: 500;
-  padding-left: 5px;
-  margin-left: 1px;
+  padding-left: 6px;
   border-left: 1px solid currentColor;
   opacity: 0.9;
 }
@@ -1460,25 +1546,26 @@ const css = `
   color: var(--copper);
 }
 .tr-due-urgent .tr-due-day { color: var(--copper); }
+.tr-due-urgent:hover { border-color: var(--copper); }
 .tr-due-over {
   background: #FDF0ED;
   border-color: #EAC0B8;
   color: var(--alert);
 }
 .tr-due-over .tr-due-day { color: var(--alert); }
+.tr-due-over:hover { border-color: var(--alert); }
 .tr-card-notes {
   font-size: 11.5px;
   color: var(--muted);
-  margin-top: 7px;
-  line-height: 1.45;
+  margin-top: 9px;
+  line-height: 1.5;
 }
 .tr-card-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  margin-top: 10px;
-  padding-top: 9px;
+  margin-top: 11px;
+  padding-top: 10px;
   border-top: 1px solid var(--line);
 }
 .tr-updated {
@@ -1491,7 +1578,7 @@ const css = `
 .tr-card-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   margin-left: auto;
 }
 .tr-status-select {
@@ -1500,23 +1587,27 @@ const css = `
   border: 1px solid var(--line);
   background: var(--paper);
   color: var(--muted);
-  border-radius: 5px;
-  padding: 4px 6px;
-  max-width: 112px;
+  border-radius: 6px;
+  padding: 5px 7px;
+  max-width: 118px;
   cursor: pointer;
   transition: border-color 0.15s, color 0.15s;
 }
 .tr-status-select:hover { border-color: var(--ink); color: var(--ink); }
-.tr-flag-btn, .tr-del-btn {
-  border: none;
+.tr-icon-btn {
+  border: 1px solid transparent;
   background: none;
-  border-radius: 5px;
-  padding: 4px 5px;
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
   cursor: pointer;
-  color: #B0BAC8;
-  display: flex;
-  transition: color 0.15s, background 0.15s;
+  color: #A2ADBE;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
+.tr-edit-btn:hover { color: var(--ink); background: var(--paper); border-color: var(--line); }
 .tr-flag-btn-on { color: var(--alert); }
 .tr-flag-btn:hover { color: var(--alert); background: #FDF0ED; }
 .tr-del-btn:hover { color: var(--alert); background: #FDF0ED; }
@@ -1714,11 +1805,20 @@ const css = `
   opacity: 0.7;
 }
 
-/* ── Card focus ring (keyboard nav) ──────────────── */
+/* ── Card focus ring (keyboard nav, fades after 5s) ── */
+.tr-card {
+  transition: box-shadow 0.35s ease, border-color 0.35s ease;
+}
 .tr-card-focused {
   border-color: var(--ink);
-  box-shadow: 0 0 0 2px rgba(22,35,61,0.16);
+  box-shadow: 0 0 0 2px rgba(22,35,61,0.18), 0 2px 10px rgba(22,35,61,0.08);
 }
+
+/* ── Due date inputs in the form ─────────────────── */
+.tr-due-inputs { display: flex; gap: 8px; }
+.tr-date-input { flex: 1.4; }
+.tr-time-input { flex: 1; }
+.tr-time-input:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Time in status chip ─────────────────────────── */
 .tr-instatus {
