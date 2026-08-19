@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Plus, X, AlertTriangle, Clock, Check, User, Users, ChevronDown, Loader2, Search, ArrowLeft, Copy, Pencil } from "lucide-react";
+import { Plus, X, AlertTriangle, Clock, Check, User, Users, ChevronDown, Loader2, Search, ArrowLeft, Copy } from "lucide-react";
 import { getProjects, saveProjects } from "./storage";
 
 const STATUSES = ["Not started", "In progress", "Waiting on reply", "Done"];
@@ -206,6 +206,8 @@ export default function HydroTracker() {
   const [showImport, setShowImport] = useState(false);
   const [importError, setImportError] = useState("");
   const [focusedCardId, setFocusedCardId] = useState(null);
+  const [collapsedIds, setCollapsedIds] = useState(() => new Set());
+  const [showHelp, setShowHelp] = useState(false);
   const saveTimer = useRef(null);
   const importFileRef = useRef(null);
   const boardSearchRef = useRef(null);
@@ -369,6 +371,31 @@ export default function HydroTracker() {
 
   function copyCode(code, id) {
     copyToClipboard(code, `${id}:code`);
+  }
+
+  function toggleCollapse(id) {
+    setCollapsedIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // Distinguish a single click (collapse) from a double click (edit) so the
+  // card doesn't flicker collapsed-then-open on a double click.
+  const clickTimer = useRef(null);
+  function handleCardClick(p) {
+    if (clickTimer.current) return; // second click of a dbl — let dblclick handle it
+    clickTimer.current = setTimeout(() => {
+      clickTimer.current = null;
+      toggleCollapse(p.id);
+    }, 200);
+  }
+  function handleCardDouble(p) {
+    clearTimeout(clickTimer.current);
+    clickTimer.current = null;
+    openEdit(p);
   }
 
   // Only close a modal when the press AND the release both happen on the
@@ -578,7 +605,10 @@ export default function HydroTracker() {
       <header className="tr-header">
         <div className="tr-title-block">
           <div className="tr-eyebrow">Johnson Barrow &middot; Project Log</div>
-          <h1>Hydro Tracker</h1>
+          <h1 className="tr-title-clickable" onClick={() => setShowHelp(true)} title="How to use Hydro Tracker">
+            Hydro Tracker
+            <span className="tr-title-help">?</span>
+          </h1>
         </div>
         <div className="tr-header-right">
           <button className="tr-export-btn" onClick={() => { setImportError(""); setShowImport(true); }} title="Import a backup JSON">
@@ -707,33 +737,72 @@ export default function HydroTracker() {
                   const u = fmtUpdated(p.updatedAt);
                   const st = fmtInStatus(p);
                   const isBlindSpot = p.flagged || (d && (d.urgent || d.overdue) && p.status !== "Done");
+                  const collapsed = collapsedIds.has(p.id);
                   return (
                     <div
-                      className={"tr-card" + (isBlindSpot ? " tr-card-flagged" : "") + (focusedCardId === p.id ? " tr-card-focused" : "")}
+                      className={"tr-card" + (isBlindSpot ? " tr-card-flagged" : "") + (focusedCardId === p.id ? " tr-card-focused" : "") + (collapsed ? " tr-card-collapsed" : "")}
                       key={p.id}
                       data-card-id={p.id}
+                      onClick={() => handleCardClick(p)}
+                      onDoubleClick={() => handleCardDouble(p)}
+                      title={collapsed ? "Click to expand · double-click to edit" : "Click to collapse · double-click to edit"}
                     >
+                      {collapsed ? (
+                        <div className="tr-card-oneline">
+                          {isBlindSpot && (
+                            <span
+                              className="tr-flag-dot"
+                              title={p.flagged ? p.flagReason : d && d.overdue ? "Overdue" : "Due soon"}
+                            >
+                              <AlertTriangle size={12} />
+                            </span>
+                          )}
+                          <span
+                            className={"tr-oneline-title" + (copiedField === `${p.id}:title` ? " tr-copied" : "")}
+                            onClick={(e) => { e.stopPropagation(); copyToClipboard(p.title, `${p.id}:title`); }}
+                            title="Click to copy title"
+                          >
+                            {p.title}
+                          </span>
+                          {copiedField === `${p.id}:title` && <span className="tr-copy-flash"><Check size={11} /> Copied</span>}
+                          {d && (
+                            <span className={"tr-due tr-due-mini" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}>
+                              <Clock size={11} />
+                              <span className="tr-due-day">{d.dayWord}</span>
+                              <span className="tr-due-time">{d.timeStr}</span>
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                      <>
                       {isBlindSpot && (
                         <div className="tr-flag-tag">
                           <AlertTriangle size={11} />
                           {p.flagged ? p.flagReason : d.overdue ? "Overdue" : "Due soon"}
                         </div>
                       )}
-                      <div
-                        className={"tr-card-title" + (copiedField === `${p.id}:title` ? " tr-copied" : "")}
-                        onClick={() => copyToClipboard(p.title, `${p.id}:title`)}
-                        title="Click to copy title"
-                      >
-                        <span className="tr-card-title-text">{p.title}</span>
-                        <span className="tr-copy-hint">{copiedField === `${p.id}:title` ? "copied" : <Copy size={11} />}</span>
+                      <div className="tr-card-title">
+                        <span
+                          className={"tr-card-title-text" + (copiedField === `${p.id}:title` ? " tr-copied" : "")}
+                          onClick={(e) => { e.stopPropagation(); copyToClipboard(p.title, `${p.id}:title`); }}
+                          title="Click to copy title"
+                        >
+                          {p.title}
+                        </span>
+                        {copiedField === `${p.id}:title`
+                          ? <span className="tr-copy-flash"><Check size={11} /> Copied</span>
+                          : <span className="tr-copy-hint"><Copy size={11} /></span>}
                       </div>
+
                       {p.projectCode && (
                         <button
                           className={"tr-code-badge" + (copiedField === `${p.id}:code` ? " tr-code-badge-copied" : "")}
-                          onClick={() => copyCode(p.projectCode, p.id)}
+                          onClick={(e) => { e.stopPropagation(); copyCode(p.projectCode, p.id); }}
                           title="Click to copy project number"
                         >
-                          {copiedField === `${p.id}:code` ? "✓ copied!" : p.projectCode}
+                          {copiedField === `${p.id}:code`
+                            ? <><Check size={11} /> Copied</>
+                            : p.projectCode}
                         </button>
                       )}
                       <div className="tr-card-meta">
@@ -742,7 +811,7 @@ export default function HydroTracker() {
                           {p.owner}
                         </span>
                         {d ? (
-                          <span className="tr-due-wrap">
+                          <span className="tr-due-wrap" onClick={(e) => e.stopPropagation()}>
                             <button
                               className={"tr-due tr-due-btn" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}
                               onClick={(e) => {
@@ -767,7 +836,7 @@ export default function HydroTracker() {
                             />
                           </span>
                         ) : (
-                          <span className="tr-due-wrap">
+                          <span className="tr-due-wrap" onClick={(e) => e.stopPropagation()}>
                             <button
                               className="tr-due tr-due-btn tr-due-empty"
                               onClick={(e) => {
@@ -802,7 +871,7 @@ export default function HydroTracker() {
                             {st.days}d
                           </span>
                         )}
-                        <div className="tr-card-actions">
+                        <div className="tr-card-actions" onClick={(e) => e.stopPropagation()}>
                           <select
                             value={p.status}
                             onChange={(e) => setStatus(p, e.target.value)}
@@ -810,9 +879,6 @@ export default function HydroTracker() {
                           >
                             {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                           </select>
-                          <button className="tr-icon-btn tr-edit-btn" onClick={() => openEdit(p)} title="Edit project">
-                            <Pencil size={13} />
-                          </button>
                           <button
                             className={"tr-icon-btn tr-flag-btn" + (p.flagged ? " tr-flag-btn-on" : "")}
                             onClick={() => toggleFlag(p)}
@@ -825,6 +891,8 @@ export default function HydroTracker() {
                           </button>
                         </div>
                       </div>
+                      </>
+                      )}
                     </div>
                   );
                 })}
@@ -1114,6 +1182,68 @@ export default function HydroTracker() {
         </div>
       )}
 
+      {showHelp && (
+        <div className="tr-modal-backdrop" {...backdropProps(() => setShowHelp(false))}>
+          <div className="tr-modal tr-modal-help" onClick={(e) => e.stopPropagation()}>
+            <div className="tr-modal-head">
+              <h2>How to use Hydro Tracker</h2>
+              <button className="tr-close" onClick={() => setShowHelp(false)}><X size={18} /></button>
+            </div>
+
+            <p className="tr-help-lede">
+              A shared board for tracking rep projects between Ben and Boone. Everything syncs live for anyone with the link.
+            </p>
+
+            <div className="tr-help-section">
+              <h3>The three views</h3>
+              <ul className="tr-help-list">
+                <li><strong>Board</strong> — your projects by stage: Not started, In progress, Waiting on reply.</li>
+                <li><strong>Done</strong> — everything you've completed, searchable.</li>
+                <li><strong>This week</strong> — anything due in the next 7 days, filterable by Ben, Boone, or both.</li>
+              </ul>
+            </div>
+
+            <div className="tr-help-section">
+              <h3>Working with cards</h3>
+              <ul className="tr-help-list">
+                <li><strong>Single click</strong> a card to collapse or expand it — collapsed cards show just the title, flag, and due date.</li>
+                <li><strong>Double click</strong> a card to edit it.</li>
+                <li><strong>Click the title text</strong> to copy it to your clipboard.</li>
+                <li><strong>Click the project number</strong> to copy it (paste it into Dynamics 365 search).</li>
+                <li><strong>Click the due date</strong> to pick a new one right on the card.</li>
+                <li>Use the <strong>status dropdown</strong> to move a project between stages, or the flag and delete icons for the rest.</li>
+              </ul>
+            </div>
+
+            <div className="tr-help-section">
+              <h3>The Ben / Boone toggle</h3>
+              <p>Switches whose projects you're looking at on the Board and Done views. Projects owned by "Both" always show for either person.</p>
+            </div>
+
+            <div className="tr-help-section">
+              <h3>Keyboard shortcuts</h3>
+              <div className="tr-help-keys">
+                <div><kbd>N</kbd><span>New project</span></div>
+                <div><kbd>E</kbd><span>Edit focused card</span></div>
+                <div><kbd>M</kbd><span>Move to next stage</span></div>
+                <div><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd><span>Move focus between cards</span></div>
+                <div><kbd>Ctrl</kbd><kbd>F</kbd><span>Search</span></div>
+                <div><kbd>Esc</kbd><span>Clear search / focus</span></div>
+              </div>
+            </div>
+
+            <div className="tr-help-section">
+              <h3>Backups</h3>
+              <p>Use <strong>Export</strong> to download a JSON snapshot, and <strong>Import</strong> to restore one. Handy before any big change.</p>
+            </div>
+
+            <div className="tr-modal-actions">
+              <button className="tr-btn-primary" onClick={() => setShowHelp(false)}>Got it</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {confettiId && <ConfettiBurst />}
 
       <footer className="tr-footer">
@@ -1182,6 +1312,32 @@ const css = `
   margin: 0;
   letter-spacing: -0.02em;
   line-height: 1;
+}
+.tr-title-clickable {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.tr-title-clickable:hover { color: var(--copper); }
+.tr-title-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  color: var(--muted);
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.tr-title-clickable:hover .tr-title-help {
+  border-color: var(--copper);
+  color: var(--copper);
 }
 .tr-header-right {
   display: flex;
@@ -1463,8 +1619,36 @@ const css = `
   border-radius: 8px;
   padding: 13px 14px 11px;
   position: relative;
+  cursor: pointer;
 }
 .tr-card:hover { box-shadow: 0 2px 8px rgba(22,35,61,0.07); }
+.tr-card-collapsed { padding: 10px 14px; }
+.tr-card-oneline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.tr-flag-dot {
+  display: inline-flex;
+  align-items: center;
+  color: var(--alert);
+  flex-shrink: 0;
+}
+.tr-oneline-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.tr-oneline-title:hover { color: var(--copper); }
+.tr-oneline-title.tr-copied { color: var(--ok); }
 .tr-card-flagged {
   border-color: var(--alert);
   border-left: 3px solid var(--alert);
@@ -1490,12 +1674,17 @@ const css = `
   gap: 8px;
   font-weight: 600;
   font-size: 13.5px;
-  cursor: pointer;
   line-height: 1.4;
   color: var(--ink);
+}
+.tr-card-title-text {
+  min-width: 0;
+  cursor: pointer;
   transition: color 0.15s;
 }
-.tr-card-title-text { min-width: 0; }
+.tr-card-title-text:hover { color: var(--copper); }
+.tr-card-title-text.tr-copied { color: var(--ok); }
+/* Shared copy feedback: hint on hover, green flash on success */
 .tr-copy-hint {
   flex-shrink: 0;
   display: inline-flex;
@@ -1503,19 +1692,38 @@ const css = `
   color: var(--muted);
   opacity: 0;
   transition: opacity 0.15s, color 0.15s;
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   margin-top: 2px;
 }
-.tr-card-title:hover { color: var(--copper); }
-.tr-card-title:hover .tr-copy-hint { opacity: 0.6; color: var(--copper); }
-.tr-card-title.tr-copied { color: var(--ok); }
-.tr-card-title.tr-copied .tr-copy-hint { opacity: 1; color: var(--ok); }
+.tr-card-title:hover .tr-copy-hint { opacity: 0.55; }
+.tr-copy-flash {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--ok);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: 2px;
+  animation: tr-copy-pop 0.18s ease-out;
+}
+@keyframes tr-copy-pop {
+  from { transform: scale(0.82); opacity: 0.4; }
+  to { transform: scale(1); opacity: 1; }
+}
+.tr-due-mini {
+  flex-shrink: 0;
+  gap: 4px;
+  padding: 3px 7px 3px 6px;
+  font-size: 11px;
+}
+.tr-due-mini .tr-due-time { font-size: 10px; }
 .tr-code-badge {
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 10px;
   font-weight: 500;
@@ -1531,7 +1739,12 @@ const css = `
   white-space: nowrap;
 }
 .tr-code-badge:hover { background: #DEE9F6; color: var(--ink); border-color: #A9C3E4; }
-.tr-code-badge-copied { background: var(--ok) !important; color: #fff !important; border-color: var(--ok) !important; }
+.tr-code-badge-copied {
+  background: var(--ok) !important;
+  color: #fff !important;
+  border-color: var(--ok) !important;
+  animation: tr-copy-pop 0.18s ease-out;
+}
 .tr-card-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1658,7 +1871,6 @@ const css = `
   justify-content: center;
   transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
-.tr-edit-btn:hover { color: var(--ink); background: var(--paper); border-color: var(--line); }
 .tr-flag-btn-on { color: var(--alert); }
 .tr-flag-btn:hover { color: var(--alert); background: #FDF0ED; }
 .tr-del-btn:hover { color: var(--alert); background: #FDF0ED; }
@@ -1778,6 +1990,83 @@ const css = `
   box-shadow: 0 8px 32px rgba(22,35,61,0.14);
 }
 .tr-modal-sm { max-width: 360px; }
+.tr-modal-help { max-width: 520px; }
+.tr-help-lede {
+  font-size: 13.5px;
+  color: var(--ink);
+  line-height: 1.55;
+  margin: 0 0 20px;
+}
+.tr-help-section { margin-bottom: 18px; }
+.tr-help-section:last-of-type { margin-bottom: 8px; }
+.tr-help-section h3 {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--copper);
+  margin: 0 0 8px;
+}
+.tr-help-section p {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 0;
+}
+.tr-help-section p strong,
+.tr-help-list strong { color: var(--ink); font-weight: 600; }
+.tr-help-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.tr-help-list li {
+  position: relative;
+  padding-left: 16px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.tr-help-list li::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 8px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--copper-dim);
+}
+.tr-help-keys {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px 18px;
+}
+.tr-help-keys > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tr-help-keys span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.tr-help-keys kbd {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--ink);
+  min-width: 20px;
+  text-align: center;
+}
 .tr-modal-head {
   display: flex;
   justify-content: space-between;
