@@ -6,6 +6,24 @@ const STATUSES = ["Not started", "In progress", "Waiting on reply", "Done"];
 const BOARD_STATUSES = ["Not started", "In progress", "Waiting on reply"];
 const OWNERS = ["Ben", "Boone", "Both"];
 
+// Small localStorage helpers for per-device UI prefs (collapse state, sort).
+// Wrapped in try/catch so private-mode or disabled storage never breaks the app.
+function lsGet(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw == null ? fallback : JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+function lsSet(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // storage full / unavailable — ignore, it's only a convenience
+  }
+}
+
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
@@ -199,14 +217,14 @@ export default function HydroTracker() {
   const [storageError, setStorageError] = useState("");
   const [activePerson, setActivePerson] = useState("Ben"); // Ben | Boone
   const [weekFilter, setWeekFilter] = useState("Both"); // Ben | Boone | Both
-  const [boardSort, setBoardSort] = useState("added"); // added | due | updated
+  const [boardSort, setBoardSort] = useState(() => lsGet("tracker-sort-v1", "added")); // added | due | updated | custom
   const [boardSearch, setBoardSearch] = useState("");
   const [confettiId, setConfettiId] = useState(null);
   const confettiRef = useRef(null);
   const [showImport, setShowImport] = useState(false);
   const [importError, setImportError] = useState("");
   const [focusedCardId, setFocusedCardId] = useState(null);
-  const [collapsedIds, setCollapsedIds] = useState(() => new Set());
+  const [collapsedIds, setCollapsedIds] = useState(() => new Set(lsGet("tracker-collapsed-v1", [])));
   const [showHelp, setShowHelp] = useState(false);
   const [draggingId, setDraggingId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
@@ -223,6 +241,10 @@ export default function HydroTracker() {
     const tick = setInterval(() => setNow(new Date()), 60000);
     return () => clearInterval(tick);
   }, []);
+
+  // Remember the chosen sort and which cards are collapsed across reloads
+  useEffect(() => { lsSet("tracker-sort-v1", boardSort); }, [boardSort]);
+  useEffect(() => { lsSet("tracker-collapsed-v1", [...collapsedIds]); }, [collapsedIds]);
 
   useEffect(() => {
     let cancelled = false;
