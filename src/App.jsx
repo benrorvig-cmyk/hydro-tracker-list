@@ -210,6 +210,7 @@ export default function HydroTracker() {
   const [showHelp, setShowHelp] = useState(false);
   const [draggingId, setDraggingId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
+  const [dragGhost, setDragGhost] = useState(null); // { x, y, w, offsetX, offsetY, project, html }
   const dragState = useRef(null); // { id, status, longPressTimer, started }
   const justDragged = useRef(false);
   const saveTimer = useRef(null);
@@ -457,16 +458,36 @@ export default function HydroTracker() {
   }
 
   function cardPointerDown(e, p) {
-    // Only left button / touch, and not on an interactive child
-    if (e.button === 2) return;
+    if (e.button === 2) return; // ignore right-click
     const startY = e.clientY, startX = e.clientX;
-    dragState.current = { id: p.id, status: p.status, started: false, startX, startY };
+    const cardEl = e.currentTarget;
+    dragState.current = { id: p.id, status: p.status, started: false, startX, startY, cardEl };
+
     const timer = setTimeout(() => {
-      if (!dragState.current) return;
-      dragState.current.started = true;
+      const ds = dragState.current;
+      if (!ds) return;
+      ds.started = true;
+
+      // Snapshot the card's geometry so the floating clone matches it exactly
+      const rect = ds.cardEl.getBoundingClientRect();
+      ds.offsetX = ds.startX - rect.left;
+      ds.offsetY = ds.startY - rect.top;
+      ds.width = rect.width;
+      ds.html = ds.cardEl.innerHTML;
+
       setDraggingId(p.id);
-      // Seed order from the current on-screen column order, then switch to
-      // custom sort so live reordering is visible as you drag.
+      setDragGhost({
+        x: rect.left,
+        y: rect.top,
+        w: rect.width,
+        html: ds.html,
+        flagged: p.flagged,
+        collapsed: collapsedIds.has(p.id),
+      });
+
+      // Kill text selection + set a grabbing cursor globally while dragging
+      document.body.classList.add("tr-dragging-active");
+
       seedOrderFromCurrent();
       setBoardSort("custom");
       if (navigator.vibrate) navigator.vibrate(15);
@@ -478,8 +499,9 @@ export default function HydroTracker() {
       if (!ds) return;
       const cy = ev.clientY ?? ev.touches?.[0]?.clientY;
       const cx = ev.clientX ?? ev.touches?.[0]?.clientX;
+
       if (!ds.started) {
-        // Moved too far before long-press fired → treat as scroll, cancel arm
+        // Moved too far before the hold completed → it's a scroll, cancel arm
         if (Math.abs(cy - ds.startY) > 8 || Math.abs(cx - ds.startX) > 8) {
           clearTimeout(ds.timer);
           dragState.current = null;
@@ -487,11 +509,17 @@ export default function HydroTracker() {
         }
         return;
       }
+
       ev.preventDefault();
-      // Find the card under the pointer
-      const el = document.elementFromPoint(cx, cy)?.closest("[data-card-id]");
-      if (el) {
-        const overId = el.getAttribute("data-card-id");
+
+      // Move the floating clone to follow the cursor anywhere on screen
+      setDragGhost((g) => g ? { ...g, x: cx - ds.offsetX, y: cy - ds.offsetY } : g);
+
+      // Reorder only when hovering another card in the SAME column
+      const under = document.elementsFromPoint(cx, cy)
+        .find((el) => el.hasAttribute?.("data-card-id"));
+      if (under) {
+        const overId = under.getAttribute("data-card-id");
         const over = projects.find((x) => x.id === overId);
         if (over && over.status === ds.status && overId !== ds.id) {
           setDragOverId(overId);
@@ -509,16 +537,20 @@ export default function HydroTracker() {
       dragState.current = null;
       setDraggingId(null);
       setDragOverId(null);
+      setDragGhost(null);
+      document.body.classList.remove("tr-dragging-active");
       cleanup();
     };
 
     const cleanup = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 
   // Only close a modal when the press AND the release both happen on the
@@ -1372,6 +1404,18 @@ export default function HydroTracker() {
         </div>
       )}
 
+      {dragGhost && (
+        <div
+          className={"tr-card tr-drag-ghost" + (dragGhost.flagged ? " tr-card-flagged" : "") + (dragGhost.collapsed ? " tr-card-collapsed" : "")}
+          style={{
+            left: dragGhost.x,
+            top: dragGhost.y,
+            width: dragGhost.w,
+          }}
+          dangerouslySetInnerHTML={{ __html: dragGhost.html }}
+        />
+      )}
+
       {confettiId && <ConfettiBurst />}
 
       <footer className="tr-footer">
@@ -1772,15 +1816,41 @@ const css = `
 }
 
 /* Drag-to-reorder states */
+/* The original card left behind becomes a quiet placeholder gap */
 .tr-card-dragging {
-  opacity: 0.55;
-  box-shadow: 0 8px 24px rgba(22,35,61,0.18);
-  cursor: grabbing;
-  transform: scale(1.02);
-  z-index: 5;
+  opacity: 0.35;
+  background: var(--paper);
+  border-style: dashed;
+  box-shadow: none;
 }
+.tr-card-dragging * { visibility: hidden; }
 .tr-card-dragover {
   box-shadow: 0 0 0 2px var(--copper);
+}
+
+/* The floating clone that follows the cursor */
+.tr-drag-ghost {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  margin: 0;
+  cursor: grabbing;
+  box-shadow: 0 12px 32px rgba(22,35,61,0.22);
+  transform: rotate(-1.2deg) scale(1.03);
+  transition: none;
+  opacity: 0.97;
+}
+
+/* While a card is being dragged, kill text selection everywhere */
+body.tr-dragging-active {
+  cursor: grabbing !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+body.tr-dragging-active * {
+  cursor: grabbing !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
 }
 
 .tr-card-oneline {
