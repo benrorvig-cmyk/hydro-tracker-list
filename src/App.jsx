@@ -513,6 +513,15 @@ export default function HydroTracker() {
     persist(projects.map((x) => (x.id === p.id ? { ...x, status, updatedAt: nowISO, statusChangedAt: nowISO } : x)));
   }
 
+  // Inline due-date edit straight from a card (no modal). Keeps the existing
+  // time-of-day if there was one, otherwise defaults to 4pm.
+  function setDue(p, dateStr) {
+    if (!dateStr) return;
+    const time = p.due && p.due.length >= 16 ? p.due.slice(11, 16) : "16:00";
+    const dueISO = new Date(`${dateStr}T${time}`).toISOString();
+    persist(projects.map((x) => (x.id === p.id ? { ...x, due: dueISO, updatedAt: new Date().toISOString() } : x)));
+  }
+
   if (loading || projects === null) {
     return (
       <div className="tr-root tr-center">
@@ -733,20 +742,52 @@ export default function HydroTracker() {
                           {p.owner}
                         </span>
                         {d ? (
-                          <button
-                            className={"tr-due tr-due-btn" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}
-                            onClick={() => openEdit(p, "due")}
-                            title="Click to change due date"
-                          >
-                            <Clock size={12} />
-                            <span className="tr-due-day">{d.dayWord}</span>
-                            <span className="tr-due-time">{d.timeStr}</span>
-                            {d.note && <span className="tr-due-note">{d.note}</span>}
-                          </button>
+                          <span className="tr-due-wrap">
+                            <button
+                              className={"tr-due tr-due-btn" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}
+                              onClick={(e) => {
+                                const input = e.currentTarget.parentElement.querySelector("input");
+                                input.focus();
+                                try { input.showPicker?.(); } catch { input.click(); }
+                              }}
+                              title="Click to change due date"
+                            >
+                              <Clock size={12} />
+                              <span className="tr-due-day">{d.dayWord}</span>
+                              <span className="tr-due-time">{d.timeStr}</span>
+                              {d.note && <span className="tr-due-note">{d.note}</span>}
+                            </button>
+                            <input
+                              type="date"
+                              className="tr-due-hidden"
+                              value={p.due ? p.due.slice(0, 10) : ""}
+                              onChange={(e) => { setDue(p, e.target.value); e.target.blur(); }}
+                              tabIndex={-1}
+                              aria-label="Change due date"
+                            />
+                          </span>
                         ) : (
-                          <button className="tr-due tr-due-btn tr-due-empty" onClick={() => openEdit(p, "due")} title="Set a due date">
-                            <Clock size={12} /> Set due date
-                          </button>
+                          <span className="tr-due-wrap">
+                            <button
+                              className="tr-due tr-due-btn tr-due-empty"
+                              onClick={(e) => {
+                                const input = e.currentTarget.parentElement.querySelector("input");
+                                input.focus();
+                                try { input.showPicker?.(); } catch { input.click(); }
+                              }}
+                              title="Set a due date"
+                            >
+                              <Clock size={12} /> Set due date
+                            </button>
+                            <input
+                              type="date"
+                              className="tr-due-hidden"
+                              value=""
+                              onChange={(e) => { setDue(p, e.target.value); e.target.blur(); }}
+                              tabIndex={-1}
+                              aria-label="Set due date"
+                            />
+                          </span>
                         )}
                       </div>
                       {p.notes && <div className="tr-card-notes">{p.notes}</div>}
@@ -927,52 +968,49 @@ export default function HydroTracker() {
                 </select>
               </label>
             </div>
-            <div className="tr-field-row">
-              <label className="tr-field">
-                <span>Project code <span className="tr-field-hint">XXXX-XXXX</span></span>
+            <label className="tr-field">
+              <span>Project code <span className="tr-field-hint">XXXX-XXXX</span></span>
+              <input
+                value={draft.projectCode || ""}
+                onChange={(e) => {
+                  let v = e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, "");
+                  if (v.length === 4 && (draft.projectCode || "").length === 3) v = v + "-";
+                  if (v.length > 9) v = v.slice(0, 9);
+                  setDraft({ ...draft, projectCode: v });
+                }}
+                placeholder="e.g. 1234-5678"
+                maxLength={9}
+                className="tr-code-input"
+              />
+            </label>
+            <label className="tr-field">
+              <span>Due date</span>
+              <div className="tr-due-inputs">
                 <input
-                  value={draft.projectCode || ""}
+                  ref={dueInputRef}
+                  type="date"
+                  className="tr-date-input"
+                  value={draft.due ? draft.due.slice(0, 10) : ""}
                   onChange={(e) => {
-                    let v = e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, "");
-                    if (v.length === 4 && (draft.projectCode || "").length === 3) v = v + "-";
-                    if (v.length > 9) v = v.slice(0, 9);
-                    setDraft({ ...draft, projectCode: v });
+                    const date = e.target.value;
+                    const time = draft.due && draft.due.length >= 16 ? draft.due.slice(11, 16) : "16:00";
+                    setDraft({ ...draft, due: date ? `${date}T${time}` : "" });
+                    e.target.blur(); // collapse the calendar on pick
                   }}
-                  placeholder="e.g. 1234-5678"
-                  maxLength={9}
-                  className="tr-code-input"
                 />
-              </label>
-              <label className="tr-field">
-                <span>Due</span>
-                <div className="tr-due-inputs">
-                  <input
-                    ref={dueInputRef}
-                    type="date"
-                    className="tr-date-input"
-                    value={draft.due ? draft.due.slice(0, 10) : ""}
-                    onChange={(e) => {
-                      const date = e.target.value;
-                      const time = draft.due && draft.due.length >= 16 ? draft.due.slice(11, 16) : "16:00";
-                      setDraft({ ...draft, due: date ? `${date}T${time}` : "" });
-                      // Collapse the calendar the moment a day is chosen
-                      e.target.blur();
-                    }}
-                  />
-                  <input
-                    type="time"
-                    className="tr-time-input"
-                    value={draft.due && draft.due.length >= 16 ? draft.due.slice(11, 16) : ""}
-                    onChange={(e) => {
-                      const time = e.target.value;
-                      const date = draft.due ? draft.due.slice(0, 10) : new Date().toISOString().slice(0, 10);
-                      setDraft({ ...draft, due: time ? `${date}T${time}` : draft.due });
-                    }}
-                    disabled={!draft.due}
-                  />
-                </div>
-              </label>
-            </div>
+                <input
+                  type="time"
+                  className="tr-time-input"
+                  value={draft.due && draft.due.length >= 16 ? draft.due.slice(11, 16) : ""}
+                  onChange={(e) => {
+                    const time = e.target.value;
+                    const date = draft.due ? draft.due.slice(0, 10) : new Date().toISOString().slice(0, 10);
+                    setDraft({ ...draft, due: time ? `${date}T${time}` : draft.due });
+                  }}
+                  disabled={!draft.due}
+                />
+              </div>
+            </label>
             <label className="tr-field">
               <span>Notes</span>
               <textarea
@@ -1520,6 +1558,19 @@ const css = `
 .tr-due-btn:hover { border-color: var(--ink); }
 .tr-due-empty { color: var(--muted); font-style: normal; }
 .tr-due-empty:hover { color: var(--ink); }
+.tr-due-wrap { position: relative; display: inline-flex; }
+.tr-due-hidden {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
 .tr-due-day {
   font-weight: 600;
   color: var(--ink);
@@ -1815,10 +1866,15 @@ const css = `
 }
 
 /* ── Due date inputs in the form ─────────────────── */
-.tr-due-inputs { display: flex; gap: 8px; }
-.tr-date-input { flex: 1.4; }
-.tr-time-input { flex: 1; }
+.tr-due-inputs { display: flex; gap: 10px; }
+.tr-date-input { flex: 1 1 0; min-width: 0; }
+.tr-time-input { flex: 0 0 130px; min-width: 0; }
 .tr-time-input:disabled { opacity: 0.5; cursor: not-allowed; }
+.tr-field input[type="date"], .tr-field input[type="time"] {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
 
 /* ── Time in status chip ─────────────────────────── */
 .tr-instatus {
