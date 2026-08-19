@@ -757,14 +757,16 @@ export default function HydroTracker() {
                               <AlertTriangle size={12} />
                             </span>
                           )}
-                          <span
-                            className={"tr-oneline-title" + (copiedField === `${p.id}:title` ? " tr-copied" : "")}
-                            onClick={(e) => { e.stopPropagation(); copyToClipboard(p.title, `${p.id}:title`); }}
-                            title="Click to copy title"
-                          >
-                            {p.title}
+                          <span className="tr-oneline-titlewrap">
+                            <span
+                              className={"tr-oneline-title" + (copiedField === `${p.id}:title` ? " tr-copied" : "")}
+                              onClick={(e) => { e.stopPropagation(); copyToClipboard(p.title, `${p.id}:title`); }}
+                              title="Click to copy title"
+                            >
+                              {p.title}
+                            </span>
+                            {copiedField === `${p.id}:title` && <span className="tr-copy-flash"><Check size={11} /> Copied</span>}
                           </span>
-                          {copiedField === `${p.id}:title` && <span className="tr-copy-flash"><Check size={11} /> Copied</span>}
                           {d && (
                             <span className={"tr-due tr-due-mini" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}>
                               <Clock size={11} />
@@ -1635,9 +1637,16 @@ const css = `
   color: var(--alert);
   flex-shrink: 0;
 }
-.tr-oneline-title {
+.tr-oneline-titlewrap {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tr-oneline-title {
+  min-width: 0;
+  max-width: 100%;
   font-weight: 600;
   font-size: 13px;
   color: var(--ink);
