@@ -1162,25 +1162,24 @@ export default function HydroTracker() {
                       onDoubleClick={() => handleCardDouble(p)}
                       title={collapsed ? "Click to expand · double-click to edit · hold to reorder" : "Click to collapse · double-click to edit · hold to reorder"}
                     >
-                      {/* Always-visible summary line */}
-                      {(p.kind || !collapsed) && (
+                      {/* Type label — its own small caps line when expanded */}
+                      {!collapsed && (
                         <div className="tr-kind-row" onClick={(e) => e.stopPropagation()}>
-                          <div className="tr-kind-select-wrap">
-                            <select
-                              className={"tr-kind-select" + (p.kind ? "" : " tr-kind-select-empty")}
-                              value={p.kind || ""}
-                              onChange={(e) => setKind(p, e.target.value)}
-                              title="Set project type"
-                              tabIndex={collapsed ? -1 : 0}
-                            >
-                              <option value="">{collapsed ? "" : "— type —"}</option>
-                              {PROJECT_KINDS.map((k) => (
-                                <option key={k} value={k}>{k.toUpperCase()}</option>
-                              ))}
-                            </select>
-                          </div>
+                          <select
+                            className={"tr-kind-select" + (p.kind ? "" : " tr-kind-select-empty")}
+                            value={p.kind || ""}
+                            onChange={(e) => setKind(p, e.target.value)}
+                            title="Set project type"
+                          >
+                            <option value="">— type —</option>
+                            {PROJECT_KINDS.map((k) => (
+                              <option key={k} value={k}>{k.toUpperCase()}</option>
+                            ))}
+                          </select>
                         </div>
                       )}
+
+                      {/* Title line — single row; carries type + due inline when collapsed */}
                       <div className="tr-card-oneline">
                         {isBlindSpot && (
                           <span
@@ -1189,6 +1188,9 @@ export default function HydroTracker() {
                           >
                             <AlertTriangle size={12} />
                           </span>
+                        )}
+                        {collapsed && p.kind && (
+                          <span className="tr-kind-inline">{p.kind.toUpperCase()}</span>
                         )}
                         <span className="tr-oneline-titlewrap">
                           <span
@@ -2108,10 +2110,8 @@ body.tr-dragging-active * {
 }
 
 .tr-kind-row {
-  margin-bottom: 3px;
-}
-.tr-kind-select-wrap {
-  display: inline-flex;
+  margin-bottom: 5px;
+  line-height: 1;
 }
 .tr-kind-select {
   appearance: none;
@@ -2121,18 +2121,31 @@ body.tr-dragging-active * {
   padding: 0;
   margin: 0;
   font-family: 'IBM Plex Sans', sans-serif;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
   cursor: pointer;
   transition: color 0.15s;
 }
-.tr-kind-select:hover { color: var(--ink); }
-.tr-kind-select:focus { outline: none; color: var(--ink); }
-.tr-kind-select-empty { color: #B0BAC8; font-style: normal; opacity: 0.75; }
+.tr-kind-select:hover { color: var(--copper); }
+.tr-kind-select:focus { outline: none; color: var(--copper); }
+.tr-kind-select-empty { color: #BCC5D2; font-weight: 600; }
+.tr-kind-inline {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
 .tr-card-oneline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 .tr-flag-dot {
   display: inline-flex;
   align-items: center;
