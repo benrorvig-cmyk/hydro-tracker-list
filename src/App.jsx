@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Plus, X, AlertTriangle, Clock, Check, User, Users, Loader2, Search, Copy, Pencil } from "lucide-react";
-import { getProjects, saveProjects, getPeople, savePeople } from "./storage";
+import { getProjects, saveProjects, getPeople, savePeople, officePrefix } from "./storage";
 
 const STATUSES = ["Not started", "In progress", "Waiting on reply", "Done"];
 const BOARD_STATUSES = ["Not started", "In progress", "Waiting on reply"];
@@ -624,10 +624,13 @@ export default function HydroTracker() {
     return () => { cancelled = true; };
   }, []);
 
-  // Poll for changes made by a teammate every 15s so the board stays in sync
-  // without needing a real-time connection.
+  // Poll for teammate changes so the board stays in sync without a realtime
+  // connection. Polling pauses while the tab is hidden (saves Redis commands
+  // against the free-tier quota) and does an immediate refresh on return.
   useEffect(() => {
-    const poll = setInterval(async () => {
+    let poll = null;
+
+    async function refresh() {
       try {
         const [list, ppl] = await Promise.all([getProjects(), getPeople()]);
         setProjects((prev) => (JSON.stringify(prev) !== JSON.stringify(list) ? list : prev));
@@ -636,8 +639,27 @@ export default function HydroTracker() {
       } catch (e) {
         setStorageError(e.message || "Couldn't sync the board");
       }
-    }, 15000);
-    return () => clearInterval(poll);
+    }
+
+    function start() {
+      if (poll) return;
+      poll = setInterval(refresh, 15000);
+    }
+    function stop() {
+      if (poll) { clearInterval(poll); poll = null; }
+    }
+    function onVisibility() {
+      if (document.hidden) {
+        stop();
+      } else {
+        refresh(); // catch up immediately on return
+        start();
+      }
+    }
+
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { stop(); document.removeEventListener("visibilitychange", onVisibility); };
   }, []);
 
   // ── Keyboard shortcuts ──────────────────────────────────────────────
@@ -1209,7 +1231,10 @@ export default function HydroTracker() {
 
       <header className="tr-header">
         <div className="tr-title-block">
-          <div className="tr-eyebrow">Johnson Barrow &middot; Project Log</div>
+          <div className="tr-eyebrow">
+            Johnson Barrow &middot; Project Log
+            {officePrefix && <span className="tr-office-badge">{officePrefix}</span>}
+          </div>
           <h1 className="tr-title-clickable" onClick={() => setShowHelp(true)} title="How to use Hydro Tracker">
             Hydro Tracker
             <span className="tr-title-help">?</span>
@@ -1790,6 +1815,14 @@ const css = `
   color: var(--copper);
   text-transform: uppercase;
   margin-bottom: 3px;
+}
+.tr-office-badge {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--paper);
+  letter-spacing: 0.1em;
 }
 .tr-header h1 {
   font-family: 'Space Grotesk', sans-serif;
