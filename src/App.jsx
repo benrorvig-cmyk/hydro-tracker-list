@@ -335,6 +335,36 @@ function SettingsModal({ people, projects, onAdd, onRename, onRemove, onClose, b
   );
 }
 
+// Segmented control whose sliding pill is measured from the real button
+// geometry, so options can size to their content (no truncation of short
+// names, ellipsis only past a max width) and the pill always lines up.
+function SegControl({ options, value, onChange, ariaLabel }) {
+  const btnRefs = useRef({});
+  const [pill, setPill] = useState({ left: 3, width: 0 });
+
+  useEffect(() => {
+    const el = btnRefs.current[value];
+    if (el) setPill({ left: el.offsetLeft, width: el.offsetWidth });
+  }, [value, options.join("|")]);
+
+  return (
+    <div className="tr-seg" role="group" aria-label={ariaLabel}>
+      <span className="tr-seg-pill" style={{ transform: `translateX(${pill.left}px)`, width: pill.width }} />
+      {options.map((opt) => (
+        <button
+          key={opt}
+          ref={(el) => { btnRefs.current[opt] = el; }}
+          className={"tr-seg-btn" + (value === opt ? " tr-seg-btn-active" : "")}
+          onClick={() => onChange(opt)}
+          title={opt}
+        >
+          {opt}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function HydroTracker() {
   const [projects, setProjects] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1039,46 +1069,20 @@ export default function HydroTracker() {
             </button>
           </div>
           {view !== "week" && people.length > 0 && (
-            <div className="tr-seg" role="group" aria-label="Whose projects to view">
-              <span
-                className="tr-seg-pill"
-                style={{
-                  width: `calc((100% - 6px) / ${people.length})`,
-                  transform: `translateX(${Math.max(0, people.indexOf(currentPerson)) * 100}%)`,
-                }}
-              />
-              {people.map((name) => (
-                <button
-                  key={name}
-                  className={"tr-seg-btn" + (currentPerson === name ? " tr-seg-btn-active" : "")}
-                  onClick={() => setActivePerson(name)}
-                  title={name}
-                >
-                  {name}
-                </button>
-              ))}
-            </div>
+            <SegControl
+              options={people}
+              value={currentPerson}
+              onChange={setActivePerson}
+              ariaLabel="Whose projects to view"
+            />
           )}
           {view === "week" && (
-            <div className="tr-seg" role="group" aria-label="Filter this week by owner">
-              <span
-                className="tr-seg-pill"
-                style={{
-                  width: `calc((100% - 6px) / ${people.length + 1})`,
-                  transform: `translateX(${[...people, "Both"].indexOf(weekFilter) * 100}%)`,
-                }}
-              />
-              {[...people, "Both"].map((o) => (
-                <button
-                  key={o}
-                  className={"tr-seg-btn" + (weekFilter === o ? " tr-seg-btn-active" : "")}
-                  onClick={() => setWeekFilter(o)}
-                  title={o}
-                >
-                  {o}
-                </button>
-              ))}
-            </div>
+            <SegControl
+              options={[...people, "Both"]}
+              value={weekFilter}
+              onChange={setWeekFilter}
+              ariaLabel="Filter this week by owner"
+            />
           )}
         </div>
         {view === "board" && (
@@ -1915,10 +1919,10 @@ const css = `
 .tr-seg-btn {
   position: relative;
   z-index: 1;
-  flex: 1 1 0;
+  flex: 0 0 auto;
   min-width: 54px;
-  max-width: 130px;
-  padding: 0 14px;
+  max-width: 150px;
+  padding: 0 16px;
   border: none;
   background: none;
   cursor: pointer;
@@ -2373,22 +2377,25 @@ body.tr-dragging-active * {
 .tr-card-actions {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 6px;
   margin-left: auto;
 }
 .tr-status-select {
-  font-size: 11px;
+  appearance: none;
+  -webkit-appearance: none;
+  font-size: 12px;
   font-family: 'IBM Plex Sans', sans-serif;
-  border: 1px solid var(--line);
-  background: var(--paper);
+  font-weight: 600;
+  border: none;
+  background: none;
   color: var(--muted);
-  border-radius: 6px;
-  padding: 5px 7px;
-  max-width: 118px;
+  padding: 0;
+  max-width: 130px;
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
+  transition: color 0.15s;
 }
-.tr-status-select:hover { border-color: var(--ink); color: var(--ink); }
+.tr-status-select:hover { color: var(--copper); }
+.tr-status-select:focus { outline: none; color: var(--copper); }
 .tr-icon-btn {
   border: 1px solid transparent;
   background: none;
