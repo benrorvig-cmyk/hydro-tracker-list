@@ -487,11 +487,12 @@ function ProjectCard({
     >
       {/* Type label + project code on one row, expanded only */}
       {!collapsed && (
-        <div className="tr-kind-row" onClick={(e) => e.stopPropagation()}>
+        <div className="tr-kind-row">
           <select
             className={"tr-kind-select" + (p.kind ? "" : " tr-kind-select-empty")}
             value={p.kind || ""}
             onChange={(e) => onSetKind(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
             title="Set project type"
           >
             <option value="">— type —</option>
@@ -814,17 +815,22 @@ export default function HydroTracker() {
 
   // Distinguish a single click (collapse) from a double click (edit) so the
   // card doesn't flicker collapsed-then-open on a double click.
+  // Single click collapses/expands instantly. If a double-click follows, we
+  // undo that toggle and open the editor instead — so there's no 200ms wait
+  // on every click just to detect a possible double-click.
   const clickTimer = useRef(null);
   function handleCardClick(p) {
-    if (clickTimer.current) return; // second click of a dbl — let dblclick handle it
-    clickTimer.current = setTimeout(() => {
-      clickTimer.current = null;
-      toggleCollapse(p.id);
-    }, 200);
+    toggleCollapse(p.id);          // respond immediately — feels snappy
+    clickTimer.current = p.id;     // remember we just toggled this card
+    setTimeout(() => { if (clickTimer.current === p.id) clickTimer.current = null; }, 300);
   }
   function handleCardDouble(p) {
-    clearTimeout(clickTimer.current);
-    clickTimer.current = null;
+    // A double-click already toggled once via the first click — undo it so the
+    // card's collapsed state is unchanged, then open the editor.
+    if (clickTimer.current === p.id) {
+      toggleCollapse(p.id);
+      clickTimer.current = null;
+    }
     openEdit(p);
   }
 
@@ -926,8 +932,10 @@ export default function HydroTracker() {
       const cx = ev.clientX ?? ev.touches?.[0]?.clientX;
 
       if (!ds.started) {
-        // Moved too far before the hold completed → it's a scroll, cancel arm
-        if (Math.abs(cy - ds.startY) > 8 || Math.abs(cx - ds.startX) > 8) {
+        // Moved beyond a small tolerance before the hold completed → it's a
+        // scroll/drag-intent, not a click. 10px is forgiving enough that
+        // normal click jitter (especially on a mouse) never trips it.
+        if (Math.abs(cy - ds.startY) > 10 || Math.abs(cx - ds.startX) > 10) {
           clearTimeout(ds.timer);
           dragState.current = null;
           cleanup();
@@ -957,7 +965,14 @@ export default function HydroTracker() {
       const ds = dragState.current;
       if (ds) {
         clearTimeout(ds.timer);
-        if (ds.started) { commitOrder(); justDragged.current = true; }
+        if (ds.started) {
+          commitOrder();
+          // Suppress only the click that immediately follows this drag, and
+          // self-clear shortly after so a stuck flag can never eat a later
+          // click. (The click event fires right after pointerup.)
+          justDragged.current = true;
+          setTimeout(() => { justDragged.current = false; }, 350);
+        }
       }
       dragState.current = null;
       setDraggingId(null);
@@ -1392,8 +1407,8 @@ export default function HydroTracker() {
                       copiedField={copiedField}
                       onPointerDown={(e) => cardPointerDown(e, p)}
                       onClick={() => {
-                        if (justDragged.current) { justDragged.current = false; return; }
-                        if (!draggingId) handleCardClick(p);
+                        if (justDragged.current || draggingId) return;
+                        handleCardClick(p);
                       }}
                       onDoubleClick={() => handleCardDouble(p)}
                       onCopyTitle={() => copyToClipboard(p.title, `${p.id}:title`)}
