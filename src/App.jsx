@@ -465,7 +465,7 @@ function SegControl({ options, value, onChange, ariaLabel }) {
 function ProjectCard({
   p, d, u, st, isBlindSpot, collapsed, focused, dragging, dragOver,
   copiedField, onPointerDown, onClick, onDoubleClick,
-  onCopyTitle, onCopyCode, onSetKind, onSetStatus, onSetDue, onToggleFlag, onRequestDelete,
+  onCopyTitle, onCopyCode, onSetKind, onSetStatus, onSetDue, onToggleFlag, onRequestDelete, onEdit,
 }) {
   const titleCopied = copiedField === `${p.id}:title`;
   const codeCopied = copiedField === `${p.id}:code`;
@@ -540,6 +540,9 @@ function ProjectCard({
                 {st.days}d
               </span>
             )}
+            <button className="tr-edit-btn" onClick={(e) => { e.stopPropagation(); onEdit(); }} title="Edit project" tabIndex={tab}>
+              <Pencil size={13} /> Edit
+            </button>
             <div className="tr-card-actions" onClick={(e) => e.stopPropagation()}>
               <select value={p.status} onChange={(e) => onSetStatus(e.target.value)} className="tr-status-select" tabIndex={tab}>
                 {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -815,12 +818,11 @@ export default function HydroTracker() {
 
   // Distinguish a single click (collapse) from a double click (edit) so the
   // card doesn't flicker collapsed-then-open on a double click.
-  // Single click collapses/expands after a short 120ms window, just long
-  // enough to tell a single click from a double-click (which edits) without
-  // feeling laggy.
+  // Editing now has a dedicated button, so a single click can collapse
+  // instantly. Double-click still opens the editor as a convenient shortcut.
   const clickTimer = useRef(null);
   function handleCardClick(p) {
-    if (clickTimer.current) return; // second click of a double — let dblclick handle it
+    if (clickTimer.current) return; // part of a double-click
     clickTimer.current = setTimeout(() => {
       clickTimer.current = null;
       toggleCollapse(p.id);
@@ -1416,6 +1418,7 @@ export default function HydroTracker() {
                       onSetDue={(dateStr) => setDue(p, dateStr)}
                       onToggleFlag={() => toggleFlag(p)}
                       onRequestDelete={() => requestDelete(p)}
+                      onEdit={() => openEdit(p)}
                     />
                   );
                 })}
@@ -2422,11 +2425,33 @@ body.tr-dragging-active * {
   white-space: nowrap;
 }
 .tr-updated-stale { color: var(--copper); }
+.tr-edit-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  margin: 0 4px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--muted);
+  border-radius: 7px;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.tr-edit-btn:hover {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
 .tr-card-actions {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
 }
 .tr-status-select {
   appearance: none;
