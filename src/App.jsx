@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Plus, X, AlertTriangle, Clock, Check, User, Users, ChevronDown, Loader2, Search, ArrowLeft, Copy, Pencil } from "lucide-react";
+import { Plus, X, AlertTriangle, Clock, Check, User, Users, Loader2, Search, Copy, Pencil } from "lucide-react";
 import { getProjects, saveProjects, getPeople, savePeople } from "./storage";
 
 const STATUSES = ["Not started", "In progress", "Waiting on reply", "Done"];
@@ -338,6 +338,84 @@ function SettingsModal({ people, projects, onAdd, onRename, onRemove, onClose, b
 // Segmented control whose sliding pill is measured from the real button
 // geometry, so options can size to their content (no truncation of short
 // names, ellipsis only past a max width) and the pill always lines up.
+// ── Small shared presentational pieces (used across board/week/done) ──
+function OwnerTag({ owner }) {
+  return (
+    <span className="tr-owner">
+      {owner === "Both" ? <Users size={12} /> : <User size={12} />}
+      {owner}
+    </span>
+  );
+}
+
+// Read-only due chip (compact variant available for collapsed cards / lists)
+function DueChip({ d, mini }) {
+  if (!d) return null;
+  const cls = "tr-due" + (mini ? " tr-due-mini" : "")
+    + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "");
+  return (
+    <span className={cls}>
+      <Clock size={mini ? 11 : 12} />
+      <span className="tr-due-day">{d.dayWord}</span>
+      <span className="tr-due-time">{d.timeStr}</span>
+      {!mini && d.note && <span className="tr-due-note">{d.note}</span>}
+    </span>
+  );
+}
+
+// Copy-to-clipboard project-code badge
+function CodeBadge({ code, copied, onCopy, tabIndex = 0 }) {
+  if (!code) return null;
+  return (
+    <button
+      className={"tr-code-badge" + (copied ? " tr-code-badge-copied" : "")}
+      onClick={(e) => { e.stopPropagation(); onCopy(); }}
+      title="Click to copy project number"
+      tabIndex={tabIndex}
+    >
+      {copied ? <><Check size={11} /> Copied</> : code}
+    </button>
+  );
+}
+
+// Inline native date picker triggered from a due button (edits in place)
+function DuePicker({ d, value, onPick, tabIndex = 0 }) {
+  const openPicker = (e) => {
+    const input = e.currentTarget.parentElement.querySelector("input");
+    input.focus();
+    try { input.showPicker?.(); } catch { input.click(); }
+  };
+  return (
+    <span className="tr-due-wrap" onClick={(e) => e.stopPropagation()}>
+      {d ? (
+        <button
+          className={"tr-due tr-due-btn" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}
+          onClick={openPicker}
+          title="Click to change due date"
+          tabIndex={tabIndex}
+        >
+          <Clock size={12} />
+          <span className="tr-due-day">{d.dayWord}</span>
+          <span className="tr-due-time">{d.timeStr}</span>
+          {d.note && <span className="tr-due-note">{d.note}</span>}
+        </button>
+      ) : (
+        <button className="tr-due tr-due-btn tr-due-empty" onClick={openPicker} title="Set a due date" tabIndex={tabIndex}>
+          <Clock size={12} /> Set due date
+        </button>
+      )}
+      <input
+        type="date"
+        className="tr-due-hidden"
+        value={value ? value.slice(0, 10) : ""}
+        onChange={(e) => { onPick(e.target.value); e.target.blur(); }}
+        tabIndex={-1}
+        aria-label={d ? "Change due date" : "Set due date"}
+      />
+    </span>
+  );
+}
+
 function SegControl({ options, value, onChange, ariaLabel }) {
   const btnRefs = useRef({});
   const [pill, setPill] = useState({ left: 3, width: 0 });
@@ -361,6 +439,108 @@ function SegControl({ options, value, onChange, ariaLabel }) {
           {opt}
         </button>
       ))}
+    </div>
+  );
+}
+
+// A single board card: collapsed one-liner or expanded detail, with inline
+// type/status/due editing, copy affordances, and drag support.
+function ProjectCard({
+  p, d, u, st, isBlindSpot, collapsed, focused, dragging, dragOver,
+  copiedField, onPointerDown, onClick, onDoubleClick,
+  onCopyTitle, onCopyCode, onSetKind, onSetStatus, onSetDue, onToggleFlag, onRequestDelete,
+}) {
+  const titleCopied = copiedField === `${p.id}:title`;
+  const codeCopied = copiedField === `${p.id}:code`;
+  const tab = collapsed ? -1 : 0;
+
+  return (
+    <div
+      className={"tr-card"
+        + (isBlindSpot ? " tr-card-flagged" : "")
+        + (focused ? " tr-card-focused" : "")
+        + (collapsed ? " tr-card-collapsed" : "")
+        + (dragging ? " tr-card-dragging" : "")
+        + (dragOver ? " tr-card-dragover" : "")}
+      data-card-id={p.id}
+      onPointerDown={onPointerDown}
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      title={collapsed ? "Click to expand · double-click to edit · hold to reorder" : "Click to collapse · double-click to edit · hold to reorder"}
+    >
+      {/* Type label — its own small caps line when expanded */}
+      {!collapsed && (
+        <div className="tr-kind-row" onClick={(e) => e.stopPropagation()}>
+          <select
+            className={"tr-kind-select" + (p.kind ? "" : " tr-kind-select-empty")}
+            value={p.kind || ""}
+            onChange={(e) => onSetKind(e.target.value)}
+            title="Set project type"
+          >
+            <option value="">— type —</option>
+            {PROJECT_KINDS.map((k) => <option key={k} value={k}>{k.toUpperCase()}</option>)}
+          </select>
+        </div>
+      )}
+
+      {/* Title line — single row; carries type + due inline when collapsed */}
+      <div className="tr-card-oneline">
+        {isBlindSpot && (
+          <span className="tr-flag-dot" title={p.flagged ? p.flagReason : d && d.overdue ? "Overdue" : "Due soon"}>
+            <AlertTriangle size={12} />
+          </span>
+        )}
+        {collapsed && p.kind && <span className="tr-kind-inline">{p.kind.toUpperCase()}</span>}
+        <span className="tr-oneline-titlewrap">
+          <span
+            className={"tr-oneline-title" + (titleCopied ? " tr-copied" : "")}
+            onClick={(e) => { e.stopPropagation(); onCopyTitle(); }}
+            title="Click to copy title"
+          >
+            {p.title}
+          </span>
+          {titleCopied
+            ? <span className="tr-copy-flash"><Check size={11} /> Copied</span>
+            : <span className="tr-copy-hint tr-copy-hint-expanded"><Copy size={11} /></span>}
+        </span>
+        {collapsed && <DueChip d={d} mini />}
+      </div>
+
+      {/* Expandable body — animates open/closed */}
+      <div className={"tr-card-collapse" + (collapsed ? " tr-card-collapse-closed" : "")} aria-hidden={collapsed}>
+        <div className="tr-card-collapse-inner">
+          <CodeBadge code={p.projectCode} copied={codeCopied} onCopy={onCopyCode} tabIndex={tab} />
+          <div className="tr-card-meta">
+            <OwnerTag owner={p.owner} />
+            <DuePicker d={d} value={p.due} onPick={onSetDue} tabIndex={tab} />
+          </div>
+          {p.notes && <div className="tr-card-notes">{p.notes}</div>}
+          <div className="tr-card-footer">
+            {u && <span className={"tr-updated" + (u.diffDays >= 5 ? " tr-updated-stale" : "")}>{u.rel}</span>}
+            {st && (
+              <span className={"tr-instatus tr-instatus-" + st.level} title={`In "${p.status}" for ${st.days} day${st.days > 1 ? "s" : ""}`}>
+                {st.days}d
+              </span>
+            )}
+            <div className="tr-card-actions" onClick={(e) => e.stopPropagation()}>
+              <select value={p.status} onChange={(e) => onSetStatus(e.target.value)} className="tr-status-select" tabIndex={tab}>
+                {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <button
+                className={"tr-icon-btn tr-flag-btn" + (p.flagged ? " tr-flag-btn-on" : "")}
+                onClick={onToggleFlag}
+                title={p.flagged ? "Unflag" : "Mark as blind spot"}
+                tabIndex={tab}
+              >
+                {p.flagged ? <Check size={13} /> : <AlertTriangle size={13} />}
+              </button>
+              <button className="tr-icon-btn tr-del-btn" onClick={onRequestDelete} title="Delete" tabIndex={tab}>
+                <X size={13} />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1152,182 +1332,32 @@ export default function HydroTracker() {
                   const isBlindSpot = p.flagged || (d && (d.urgent || d.overdue) && p.status !== "Done");
                   const collapsed = collapsedIds.has(p.id);
                   return (
-                    <div
-                      className={"tr-card"
-                        + (isBlindSpot ? " tr-card-flagged" : "")
-                        + (focusedCardId === p.id ? " tr-card-focused" : "")
-                        + (collapsed ? " tr-card-collapsed" : "")
-                        + (draggingId === p.id ? " tr-card-dragging" : "")
-                        + (dragOverId === p.id && draggingId !== p.id ? " tr-card-dragover" : "")}
+                    <ProjectCard
                       key={p.id}
-                      data-card-id={p.id}
+                      p={p}
+                      d={d}
+                      u={u}
+                      st={st}
+                      isBlindSpot={isBlindSpot}
+                      collapsed={collapsed}
+                      focused={focusedCardId === p.id}
+                      dragging={draggingId === p.id}
+                      dragOver={dragOverId === p.id && draggingId !== p.id}
+                      copiedField={copiedField}
                       onPointerDown={(e) => cardPointerDown(e, p)}
                       onClick={() => {
                         if (justDragged.current) { justDragged.current = false; return; }
                         if (!draggingId) handleCardClick(p);
                       }}
                       onDoubleClick={() => handleCardDouble(p)}
-                      title={collapsed ? "Click to expand · double-click to edit · hold to reorder" : "Click to collapse · double-click to edit · hold to reorder"}
-                    >
-                      {/* Type label — its own small caps line when expanded */}
-                      {!collapsed && (
-                        <div className="tr-kind-row" onClick={(e) => e.stopPropagation()}>
-                          <select
-                            className={"tr-kind-select" + (p.kind ? "" : " tr-kind-select-empty")}
-                            value={p.kind || ""}
-                            onChange={(e) => setKind(p, e.target.value)}
-                            title="Set project type"
-                          >
-                            <option value="">— type —</option>
-                            {PROJECT_KINDS.map((k) => (
-                              <option key={k} value={k}>{k.toUpperCase()}</option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-
-                      {/* Title line — single row; carries type + due inline when collapsed */}
-                      <div className="tr-card-oneline">
-                        {isBlindSpot && (
-                          <span
-                            className="tr-flag-dot"
-                            title={p.flagged ? p.flagReason : d && d.overdue ? "Overdue" : "Due soon"}
-                          >
-                            <AlertTriangle size={12} />
-                          </span>
-                        )}
-                        {collapsed && p.kind && (
-                          <span className="tr-kind-inline">{p.kind.toUpperCase()}</span>
-                        )}
-                        <span className="tr-oneline-titlewrap">
-                          <span
-                            className={"tr-oneline-title" + (copiedField === `${p.id}:title` ? " tr-copied" : "")}
-                            onClick={(e) => { e.stopPropagation(); copyToClipboard(p.title, `${p.id}:title`); }}
-                            title="Click to copy title"
-                          >
-                            {p.title}
-                          </span>
-                          {copiedField === `${p.id}:title`
-                            ? <span className="tr-copy-flash"><Check size={11} /> Copied</span>
-                            : <span className="tr-copy-hint tr-copy-hint-expanded"><Copy size={11} /></span>}
-                        </span>
-                        {collapsed && d && (
-                          <span className={"tr-due tr-due-mini" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}>
-                            <Clock size={11} />
-                            <span className="tr-due-day">{d.dayWord}</span>
-                            <span className="tr-due-time">{d.timeStr}</span>
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Expandable body — animates open/closed */}
-                      <div className={"tr-card-collapse" + (collapsed ? " tr-card-collapse-closed" : "")} aria-hidden={collapsed}>
-                        <div className="tr-card-collapse-inner">
-                          {p.projectCode && (
-                            <button
-                              className={"tr-code-badge" + (copiedField === `${p.id}:code` ? " tr-code-badge-copied" : "")}
-                              onClick={(e) => { e.stopPropagation(); copyCode(p.projectCode, p.id); }}
-                              title="Click to copy project number"
-                              tabIndex={collapsed ? -1 : 0}
-                            >
-                              {copiedField === `${p.id}:code`
-                                ? <><Check size={11} /> Copied</>
-                                : p.projectCode}
-                            </button>
-                          )}
-                          <div className="tr-card-meta">
-                            <span className="tr-owner">
-                              {p.owner === "Both" ? <Users size={12} /> : <User size={12} />}
-                              {p.owner}
-                            </span>
-                            {d ? (
-                              <span className="tr-due-wrap" onClick={(e) => e.stopPropagation()}>
-                                <button
-                                  className={"tr-due tr-due-btn" + (d.overdue ? " tr-due-over" : d.urgent ? " tr-due-urgent" : "")}
-                                  onClick={(e) => {
-                                    const input = e.currentTarget.parentElement.querySelector("input");
-                                    input.focus();
-                                    try { input.showPicker?.(); } catch { input.click(); }
-                                  }}
-                                  title="Click to change due date"
-                                  tabIndex={collapsed ? -1 : 0}
-                                >
-                                  <Clock size={12} />
-                                  <span className="tr-due-day">{d.dayWord}</span>
-                                  <span className="tr-due-time">{d.timeStr}</span>
-                                  {d.note && <span className="tr-due-note">{d.note}</span>}
-                                </button>
-                                <input
-                                  type="date"
-                                  className="tr-due-hidden"
-                                  value={p.due ? p.due.slice(0, 10) : ""}
-                                  onChange={(e) => { setDue(p, e.target.value); e.target.blur(); }}
-                                  tabIndex={-1}
-                                  aria-label="Change due date"
-                                />
-                              </span>
-                            ) : (
-                              <span className="tr-due-wrap" onClick={(e) => e.stopPropagation()}>
-                                <button
-                                  className="tr-due tr-due-btn tr-due-empty"
-                                  onClick={(e) => {
-                                    const input = e.currentTarget.parentElement.querySelector("input");
-                                    input.focus();
-                                    try { input.showPicker?.(); } catch { input.click(); }
-                                  }}
-                                  title="Set a due date"
-                                  tabIndex={collapsed ? -1 : 0}
-                                >
-                                  <Clock size={12} /> Set due date
-                                </button>
-                                <input
-                                  type="date"
-                                  className="tr-due-hidden"
-                                  value=""
-                                  onChange={(e) => { setDue(p, e.target.value); e.target.blur(); }}
-                                  tabIndex={-1}
-                                  aria-label="Set due date"
-                                />
-                              </span>
-                            )}
-                          </div>
-                          {p.notes && <div className="tr-card-notes">{p.notes}</div>}
-                          <div className="tr-card-footer">
-                            {u && (
-                              <span className={"tr-updated" + (u.diffDays >= 5 ? " tr-updated-stale" : "")}>
-                                {u.rel}
-                              </span>
-                            )}
-                            {st && (
-                              <span className={"tr-instatus tr-instatus-" + st.level} title={`In "${p.status}" for ${st.days} day${st.days > 1 ? "s" : ""}`}>
-                                {st.days}d
-                              </span>
-                            )}
-                            <div className="tr-card-actions" onClick={(e) => e.stopPropagation()}>
-                              <select
-                                value={p.status}
-                                onChange={(e) => setStatus(p, e.target.value)}
-                                className="tr-status-select"
-                                tabIndex={collapsed ? -1 : 0}
-                              >
-                                {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-                              </select>
-                              <button
-                                className={"tr-icon-btn tr-flag-btn" + (p.flagged ? " tr-flag-btn-on" : "")}
-                                onClick={() => toggleFlag(p)}
-                                title={p.flagged ? "Unflag" : "Mark as blind spot"}
-                                tabIndex={collapsed ? -1 : 0}
-                              >
-                                {p.flagged ? <Check size={13} /> : <AlertTriangle size={13} />}
-                              </button>
-                              <button className="tr-icon-btn tr-del-btn" onClick={() => requestDelete(p)} title="Delete" tabIndex={collapsed ? -1 : 0}>
-                                <X size={13} />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                      onCopyTitle={() => copyToClipboard(p.title, `${p.id}:title`)}
+                      onCopyCode={() => copyCode(p.projectCode, p.id)}
+                      onSetKind={(k) => setKind(p, k)}
+                      onSetStatus={(s) => setStatus(p, s)}
+                      onSetDue={(dateStr) => setDue(p, dateStr)}
+                      onToggleFlag={() => toggleFlag(p)}
+                      onRequestDelete={() => requestDelete(p)}
+                    />
                   );
                 })}
               </div>
@@ -1363,21 +1393,10 @@ export default function HydroTracker() {
                         {p.title}
                       </div>
                       <div className="tr-weekrow-meta">
-                        <span className="tr-owner">
-                          {p.owner === "Both" ? <Users size={12} /> : <User size={12} />}
-                          {p.owner}
-                        </span>
+                        <OwnerTag owner={p.owner} />
                         <span className="tr-weekrow-status">{p.status}</span>
                         {st && <span className={"tr-instatus tr-instatus-" + st.level}>{st.days}d</span>}
-                        {p.projectCode && (
-                          <button
-                            className={"tr-code-badge" + (copiedField === `${p.id}:code` ? " tr-code-badge-copied" : "")}
-                            onClick={() => copyCode(p.projectCode, p.id)}
-                            title="Click to copy project number"
-                          >
-                            {copiedField === `${p.id}:code` ? "✓ copied!" : p.projectCode}
-                          </button>
-                        )}
+                        <CodeBadge code={p.projectCode} copied={copiedField === `${p.id}:code`} onCopy={() => copyCode(p.projectCode, p.id)} />
                       </div>
                     </div>
                     {d && (
@@ -1414,20 +1433,9 @@ export default function HydroTracker() {
                   <div className="tr-donerow-main">
                     <div className="tr-donerow-title" onClick={() => openEdit(p)}>{p.title}</div>
                     <div className="tr-donerow-meta">
-                      <span className="tr-owner">
-                        {p.owner === "Both" ? <Users size={12} /> : <User size={12} />}
-                        {p.owner}
-                      </span>
+                      <OwnerTag owner={p.owner} />
                       {u && <span>Completed {u.dateStr} &middot; {u.rel}</span>}
-                      {p.projectCode && (
-                        <button
-                          className={"tr-code-badge" + (copiedField === `${p.id}:code` ? " tr-code-badge-copied" : "")}
-                          onClick={() => copyCode(p.projectCode, p.id)}
-                          title="Click to copy project number"
-                        >
-                          {copiedField === `${p.id}:code` ? "✓ copied!" : p.projectCode}
-                        </button>
-                      )}
+                      <CodeBadge code={p.projectCode} copied={copiedField === `${p.id}:code`} onCopy={() => copyCode(p.projectCode, p.id)} />
                     </div>
                   </div>
                   <button className="tr-icon-btn tr-del-btn" onClick={() => requestDelete(p)} title="Delete">
@@ -2188,48 +2196,7 @@ body.tr-dragging-active * {
   border-color: var(--alert);
   border-left: 3px solid var(--alert);
 }
-.tr-flag-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: #FDF0ED;
-  color: var(--alert);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 3px 7px;
-  border-radius: 4px;
-  margin-bottom: 9px;
-}
-.tr-card-title {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  font-weight: 600;
-  font-size: 13.5px;
-  line-height: 1.4;
-  color: var(--ink);
-}
-.tr-card-title-text {
-  min-width: 0;
-  cursor: pointer;
-  transition: color 0.15s;
-}
-.tr-card-title-text:hover { color: var(--copper); }
-.tr-card-title-text.tr-copied { color: var(--ok); }
 /* Shared copy feedback: hint on hover, green flash on success */
-.tr-copy-hint {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  color: var(--muted);
-  opacity: 0;
-  transition: opacity 0.15s, color 0.15s;
-  margin-top: 2px;
-}
-.tr-card-title:hover .tr-copy-hint { opacity: 0.55; }
 .tr-copy-flash {
   flex-shrink: 0;
   display: inline-flex;
