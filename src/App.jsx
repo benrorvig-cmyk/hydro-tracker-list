@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import { Plus, X, AlertTriangle, Clock, Check, User, Users, ChevronDown, Loader2, Search, ArrowLeft, Copy } from "lucide-react";
-import { getProjects, saveProjects } from "./storage";
+import { Plus, X, AlertTriangle, Clock, Check, User, Users, ChevronDown, Loader2, Search, ArrowLeft, Copy, Pencil } from "lucide-react";
+import { getProjects, saveProjects, getPeople, savePeople } from "./storage";
 
 const STATUSES = ["Not started", "In progress", "Waiting on reply", "Done"];
 const BOARD_STATUSES = ["Not started", "In progress", "Waiting on reply"];
-const OWNERS = ["Ben", "Boone", "Both"];
+const DEFAULT_PEOPLE = ["Ben", "Boone"];
 
 // Small localStorage helpers for per-device UI prefs (collapse state, sort).
 // Wrapped in try/catch so private-mode or disabled storage never breaks the app.
@@ -112,6 +112,8 @@ function dayLabel(dueISO) {
   return target.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
 }
 
+const PROJECT_KINDS = ["Proposal", "Submittal", "Release"];
+
 const emptyDraft = () => ({
   id: null,
   title: "",
@@ -120,6 +122,7 @@ const emptyDraft = () => ({
   due: "",
   notes: "",
   projectCode: "",
+  kind: "",
   flagged: false,
   flagReason: "",
   updatedAt: "",
@@ -199,6 +202,139 @@ function ConfettiBurst() {
   }} />;
 }
 
+function SettingsModal({ people, projects, onAdd, onRename, onRemove, onClose, backdropProps }) {
+  const [newName, setNewName] = useState("");
+  const [addError, setAddError] = useState("");
+  const [editing, setEditing] = useState(null); // name being renamed
+  const [editValue, setEditValue] = useState("");
+  const [editError, setEditError] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState(null); // name pending removal
+  const [removeText, setRemoveText] = useState("");
+
+  const countFor = (name) => projects.filter((p) => p.owner === name).length;
+
+  function submitAdd() {
+    const res = onAdd(newName);
+    if (res.ok) { setNewName(""); setAddError(""); }
+    else setAddError(res.error);
+  }
+  function startEdit(name) {
+    setEditing(name); setEditValue(name); setEditError("");
+    setConfirmRemove(null);
+  }
+  function submitEdit() {
+    const res = onRename(editing, editValue);
+    if (res.ok) { setEditing(null); setEditError(""); }
+    else setEditError(res.error);
+  }
+
+  return (
+    <div className="tr-modal-backdrop" {...backdropProps(onClose)}>
+      <div className="tr-modal tr-modal-settings" onClick={(e) => e.stopPropagation()}>
+        <div className="tr-modal-head">
+          <h2>Settings</h2>
+          <button className="tr-close" onClick={onClose}><X size={18} /></button>
+        </div>
+
+        <div className="tr-set-section">
+          <h3>People</h3>
+          <p className="tr-set-hint">
+            Add teammates or rename them. Renaming updates every project they own. Removing someone reassigns their solo projects to “Both”.
+          </p>
+
+          <div className="tr-set-people">
+            {people.map((name) => (
+              <div className="tr-set-person" key={name}>
+                {editing === name ? (
+                  <div className="tr-set-editrow">
+                    <input
+                      autoFocus
+                      className="tr-set-input"
+                      value={editValue}
+                      onChange={(e) => { setEditValue(e.target.value); setEditError(""); }}
+                      onKeyDown={(e) => { if (e.key === "Enter") submitEdit(); if (e.key === "Escape") setEditing(null); }}
+                    />
+                    <button className="tr-btn-primary tr-set-save" onClick={submitEdit}>Save</button>
+                    <button className="tr-btn-ghost tr-set-cancel" onClick={() => setEditing(null)}>Cancel</button>
+                  </div>
+                ) : confirmRemove === name ? (
+                  <div className="tr-set-removebox">
+                    <div className="tr-set-confirm-text">
+                      Remove {name}?{countFor(name) > 0 && ` ${countFor(name)} project${countFor(name) > 1 ? "s" : ""} will move to “Both”.`}
+                    </div>
+                    <div className="tr-set-confirm-instruct">
+                      Type <code>delete {name}</code> to confirm.
+                    </div>
+                    <div className="tr-set-editrow">
+                      <input
+                        autoFocus
+                        className="tr-set-input"
+                        placeholder={`delete ${name}`}
+                        value={removeText}
+                        onChange={(e) => setRemoveText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && removeText.trim().toLowerCase() === `delete ${name}`.toLowerCase()) {
+                            onRemove(name); setConfirmRemove(null); setRemoveText("");
+                          }
+                          if (e.key === "Escape") { setConfirmRemove(null); setRemoveText(""); }
+                        }}
+                      />
+                      <button
+                        className="tr-btn-danger-solid tr-set-save"
+                        disabled={removeText.trim().toLowerCase() !== `delete ${name}`.toLowerCase()}
+                        onClick={() => { onRemove(name); setConfirmRemove(null); setRemoveText(""); }}
+                      >
+                        Remove
+                      </button>
+                      <button className="tr-btn-ghost tr-set-cancel" onClick={() => { setConfirmRemove(null); setRemoveText(""); }}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <span className="tr-set-name">
+                      <span className="tr-set-avatar">{name.slice(0, 1).toUpperCase()}</span>
+                      {name}
+                      <span className="tr-set-count">{countFor(name)} owned</span>
+                    </span>
+                    <span className="tr-set-actions">
+                      <button className="tr-icon-btn" onClick={() => startEdit(name)} title="Rename"><Pencil size={13} /></button>
+                      <button
+                        className="tr-icon-btn tr-del-btn"
+                        onClick={() => { setConfirmRemove(name); setRemoveText(""); setEditing(null); }}
+                        title="Remove"
+                        disabled={people.length <= 1}
+                      >
+                        <X size={13} />
+                      </button>
+                    </span>
+                  </>
+                )}
+                {editing === name && editError && <div className="tr-set-error">{editError}</div>}
+              </div>
+            ))}
+          </div>
+
+          <div className="tr-set-addrow">
+            <input
+              className="tr-set-input"
+              placeholder="Add a person…"
+              value={newName}
+              onChange={(e) => { setNewName(e.target.value); setAddError(""); }}
+              onKeyDown={(e) => { if (e.key === "Enter") submitAdd(); }}
+            />
+            <button className="tr-btn-primary" onClick={submitAdd}><Plus size={15} /> Add</button>
+          </div>
+          {addError && <div className="tr-set-error">{addError}</div>}
+        </div>
+
+        <div className="tr-modal-actions">
+          <button className="tr-btn-primary" onClick={onClose}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function HydroTracker() {
   const [projects, setProjects] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -215,8 +351,10 @@ export default function HydroTracker() {
   const [flagReasonInput, setFlagReasonInput] = useState("");
   const [confirmTarget, setConfirmTarget] = useState(null);
   const [storageError, setStorageError] = useState("");
-  const [activePerson, setActivePerson] = useState("Ben"); // Ben | Boone
-  const [weekFilter, setWeekFilter] = useState("Both"); // Ben | Boone | Both
+  const [people, setPeople] = useState(DEFAULT_PEOPLE);
+  const [activePerson, setActivePerson] = useState(DEFAULT_PEOPLE[0]);
+  const [weekFilter, setWeekFilter] = useState("Both");
+  const [showSettings, setShowSettings] = useState(false);
   const [boardSort, setBoardSort] = useState(() => lsGet("tracker-sort-v1", "added")); // added | due | updated | custom
   const [boardSearch, setBoardSearch] = useState("");
   const [confettiId, setConfettiId] = useState(null);
@@ -250,8 +388,22 @@ export default function HydroTracker() {
     let cancelled = false;
     (async () => {
       try {
-        const list = await getProjects();
-        if (!cancelled) { setProjects(list); setStorageError(""); }
+        const [list, storedPeople] = await Promise.all([getProjects(), getPeople()]);
+        if (cancelled) return;
+
+        // Seed the people list on first run from whoever already owns projects,
+        // falling back to the Ben/Boone default.
+        let ppl = storedPeople;
+        if (!ppl || ppl.length === 0) {
+          const fromProjects = [...new Set(list.map((p) => p.owner).filter((o) => o && o !== "Both"))];
+          ppl = fromProjects.length ? fromProjects : DEFAULT_PEOPLE;
+          try { await savePeople(ppl); } catch { /* non-fatal */ }
+        }
+
+        setProjects(list);
+        setPeople(ppl);
+        setActivePerson((cur) => (ppl.includes(cur) ? cur : ppl[0]));
+        setStorageError("");
       } catch (e) {
         if (!cancelled) { setProjects([]); setStorageError(e.message || "Couldn't load the board"); }
       } finally {
@@ -266,8 +418,9 @@ export default function HydroTracker() {
   useEffect(() => {
     const poll = setInterval(async () => {
       try {
-        const list = await getProjects();
+        const [list, ppl] = await Promise.all([getProjects(), getPeople()]);
         setProjects((prev) => (JSON.stringify(prev) !== JSON.stringify(list) ? list : prev));
+        if (ppl && ppl.length) setPeople((prev) => (JSON.stringify(prev) !== JSON.stringify(ppl) ? ppl : prev));
         setStorageError("");
       } catch (e) {
         setStorageError(e.message || "Couldn't sync the board");
@@ -589,6 +742,56 @@ export default function HydroTracker() {
     };
   }
 
+  function persistPeople(next) {
+    setPeople(next);
+    (async () => {
+      try { await savePeople(next); setStorageError(""); }
+      catch (e) { setStorageError(e.message || "Couldn't save people"); }
+    })();
+  }
+
+  function addPerson(rawName) {
+    const name = rawName.trim();
+    if (!name) return { ok: false, error: "Enter a name." };
+    if (people.some((p) => p.toLowerCase() === name.toLowerCase()))
+      return { ok: false, error: "That name is already on the list." };
+    if (name.toLowerCase() === "both")
+      return { ok: false, error: `"Both" is reserved.` };
+    persistPeople([...people, name]);
+    return { ok: true };
+  }
+
+  function renamePerson(oldName, rawNew) {
+    const newName = rawNew.trim();
+    if (!newName) return { ok: false, error: "Enter a name." };
+    if (newName === oldName) return { ok: true };
+    if (people.some((p) => p.toLowerCase() === newName.toLowerCase()))
+      return { ok: false, error: "That name is already on the list." };
+    if (newName.toLowerCase() === "both")
+      return { ok: false, error: `"Both" is reserved.` };
+
+    // Update the people list…
+    persistPeople(people.map((p) => (p === oldName ? newName : p)));
+    // …and cascade the rename to every project this person owns.
+    persist(projects.map((p) => (p.owner === oldName ? { ...p, owner: newName } : p)));
+    if (activePerson === oldName) setActivePerson(newName);
+    if (weekFilter === oldName) setWeekFilter(newName);
+    return { ok: true };
+  }
+
+  function removePerson(name) {
+    if (people.length <= 1) return { ok: false, error: "Keep at least one person." };
+    const ownedCount = projects.filter((p) => p.owner === name).length;
+    persistPeople(people.filter((p) => p !== name));
+    // Reassign this person's solo projects to "Both" so nothing is orphaned.
+    if (ownedCount > 0) {
+      persist(projects.map((p) => (p.owner === name ? { ...p, owner: "Both" } : p)));
+    }
+    if (activePerson === name) setActivePerson(people.find((p) => p !== name) || null);
+    if (weekFilter === name) setWeekFilter("Both");
+    return { ok: true, reassigned: ownedCount };
+  }
+
   function persist(next) {
     setProjects(next);
     setSaveState("saving");
@@ -644,7 +847,7 @@ export default function HydroTracker() {
   }
 
   function openNew() {
-    setDraft({ ...emptyDraft(), due: defaultDueTime(), owner: activePerson });
+    setDraft({ ...emptyDraft(), due: defaultDueTime(), owner: currentPerson });
     setEditingId(null);
     setFormFocus(null);
     setShowForm(true);
@@ -726,6 +929,10 @@ export default function HydroTracker() {
     persist(projects.map((x) => (x.id === p.id ? { ...x, due: dueISO, updatedAt: new Date().toISOString() } : x)));
   }
 
+  function setKind(p, kind) {
+    persist(projects.map((x) => (x.id === p.id ? { ...x, kind, updatedAt: new Date().toISOString() } : x)));
+  }
+
   if (loading || projects === null) {
     return (
       <div className="tr-root tr-center">
@@ -734,7 +941,10 @@ export default function HydroTracker() {
     );
   }
 
-  const visibleProjects = projects.filter((p) => p.owner === activePerson || p.owner === "Both");
+  const OWNERS = [...people, "Both"];
+  // If the active person was renamed/removed, fall back to the first person
+  const currentPerson = people.includes(activePerson) ? activePerson : (people[0] || null);
+  const visibleProjects = projects.filter((p) => p.owner === currentPerson || p.owner === "Both");
 
   // ── Board columns (hoisted so keyboard nav can read the same layout) ──
   const q = boardSearch.trim().toLowerCase();
@@ -791,6 +1001,9 @@ export default function HydroTracker() {
           </h1>
         </div>
         <div className="tr-header-right">
+          <button className="tr-export-btn" onClick={() => setShowSettings(true)} title="Manage people and settings">
+            ⚙ Settings
+          </button>
           <button className="tr-export-btn" onClick={() => { setImportError(""); setShowImport(true); }} title="Import a backup JSON">
             ↑ Import
           </button>
@@ -824,24 +1037,36 @@ export default function HydroTracker() {
               This week <span className="tr-count">{weekItems.length}</span>
             </button>
           </div>
-          {view !== "week" && (
-            <button
-              className="tr-person-toggle"
-              onClick={() => setActivePerson(activePerson === "Ben" ? "Boone" : "Ben")}
-              aria-label="Switch whose view you're viewing"
-            >
-              <span className={"tr-person-pill" + (activePerson === "Boone" ? " tr-person-pill-right" : "")} />
-              <span className={activePerson === "Ben" ? "tr-person-active" : ""}>Ben</span>
-              <span className={activePerson === "Boone" ? "tr-person-active" : ""}>Boone</span>
-            </button>
+          {view !== "week" && people.length > 0 && (
+            <div className="tr-seg" role="group" aria-label="Whose projects to view">
+              <span
+                className="tr-seg-pill"
+                style={{
+                  width: `calc((100% - 6px) / ${people.length})`,
+                  transform: `translateX(${Math.max(0, people.indexOf(currentPerson)) * 100}%)`,
+                }}
+              />
+              {people.map((name) => (
+                <button
+                  key={name}
+                  className={"tr-seg-btn" + (currentPerson === name ? " tr-seg-btn-active" : "")}
+                  onClick={() => setActivePerson(name)}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
           )}
           {view === "week" && (
             <div className="tr-seg" role="group" aria-label="Filter this week by owner">
               <span
                 className="tr-seg-pill"
-                style={{ transform: `translateX(${["Ben", "Boone", "Both"].indexOf(weekFilter) * 54}px)` }}
+                style={{
+                  width: `calc((100% - 6px) / ${people.length + 1})`,
+                  transform: `translateX(${[...people, "Both"].indexOf(weekFilter) * 100}%)`,
+                }}
               />
-              {["Ben", "Boone", "Both"].map((o) => (
+              {[...people, "Both"].map((o) => (
                 <button
                   key={o}
                   className={"tr-seg-btn" + (weekFilter === o ? " tr-seg-btn-active" : "")}
@@ -859,7 +1084,7 @@ export default function HydroTracker() {
               <Search size={14} />
               <input
                 ref={boardSearchRef}
-                placeholder={`Search ${activePerson}'s projects…`}
+                placeholder={`Search ${currentPerson}'s projects…`}
                 value={boardSearch}
                 onChange={(e) => setBoardSearch(e.target.value)}
               />
@@ -938,6 +1163,24 @@ export default function HydroTracker() {
                       title={collapsed ? "Click to expand · double-click to edit · hold to reorder" : "Click to collapse · double-click to edit · hold to reorder"}
                     >
                       {/* Always-visible summary line */}
+                      {(p.kind || !collapsed) && (
+                        <div className="tr-kind-row" onClick={(e) => e.stopPropagation()}>
+                          <div className="tr-kind-select-wrap">
+                            <select
+                              className={"tr-kind-select" + (p.kind ? "" : " tr-kind-select-empty")}
+                              value={p.kind || ""}
+                              onChange={(e) => setKind(p, e.target.value)}
+                              title="Set project type"
+                              tabIndex={collapsed ? -1 : 0}
+                            >
+                              <option value="">{collapsed ? "" : "— type —"}</option>
+                              {PROJECT_KINDS.map((k) => (
+                                <option key={k} value={k}>{k.toUpperCase()}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      )}
                       <div className="tr-card-oneline">
                         {isBlindSpot && (
                           <span
@@ -1088,7 +1331,7 @@ export default function HydroTracker() {
       {view === "week" && (
         <div className="tr-week">
           <div className="tr-week-intro">
-            Due in the next 7 days &mdash; {weekFilter === "Both" ? "Ben and Boone combined" : `${weekFilter}'s projects`}
+            Due in the next 7 days &mdash; {weekFilter === "Both" ? "everyone combined" : `${weekFilter}'s projects`}
           </div>
 
           {weekGroups.length === 0 && (
@@ -1218,21 +1461,30 @@ export default function HydroTracker() {
                 </select>
               </label>
             </div>
-            <label className="tr-field">
-              <span>Project code <span className="tr-field-hint">XXXX-XXXX</span></span>
-              <input
-                value={draft.projectCode || ""}
-                onChange={(e) => {
-                  let v = e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, "");
-                  if (v.length === 4 && (draft.projectCode || "").length === 3) v = v + "-";
-                  if (v.length > 9) v = v.slice(0, 9);
-                  setDraft({ ...draft, projectCode: v });
-                }}
-                placeholder="e.g. 1234-5678"
-                maxLength={9}
-                className="tr-code-input"
-              />
-            </label>
+            <div className="tr-field-row">
+              <label className="tr-field">
+                <span>Type</span>
+                <select value={draft.kind || ""} onChange={(e) => setDraft({ ...draft, kind: e.target.value })}>
+                  <option value="">None</option>
+                  {PROJECT_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+                </select>
+              </label>
+              <label className="tr-field">
+                <span>Project code <span className="tr-field-hint">XXXX-XXXX</span></span>
+                <input
+                  value={draft.projectCode || ""}
+                  onChange={(e) => {
+                    let v = e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, "");
+                    if (v.length === 4 && (draft.projectCode || "").length === 3) v = v + "-";
+                    if (v.length > 9) v = v.slice(0, 9);
+                    setDraft({ ...draft, projectCode: v });
+                  }}
+                  placeholder="e.g. 1234-5678"
+                  maxLength={9}
+                  className="tr-code-input"
+                />
+              </label>
+            </div>
             <label className="tr-field">
               <span>Due date</span>
               <div className="tr-due-inputs">
@@ -1332,6 +1584,18 @@ export default function HydroTracker() {
         </div>
       )}
 
+      {showSettings && (
+        <SettingsModal
+          people={people}
+          projects={projects}
+          onAdd={addPerson}
+          onRename={renamePerson}
+          onRemove={removePerson}
+          onClose={() => setShowSettings(false)}
+          backdropProps={backdropProps}
+        />
+      )}
+
       {showImport && (
         <div className="tr-modal-backdrop" {...backdropProps(() => setShowImport(false))}>
           <div className="tr-modal tr-modal-sm" onClick={(e) => e.stopPropagation()}>
@@ -1373,7 +1637,7 @@ export default function HydroTracker() {
             </div>
 
             <p className="tr-help-lede">
-              A shared board for tracking rep projects between Ben and Boone. Everything syncs live for anyone with the link.
+              A shared board for tracking rep projects across the team. Everything syncs live for anyone with the link.
             </p>
 
             <div className="tr-help-section">
@@ -1381,7 +1645,7 @@ export default function HydroTracker() {
               <ul className="tr-help-list">
                 <li><strong>Board</strong> — your projects by stage: Not started, In progress, Waiting on reply.</li>
                 <li><strong>Done</strong> — everything you've completed, searchable.</li>
-                <li><strong>This week</strong> — anything due in the next 7 days, filterable by Ben, Boone, or both.</li>
+                <li><strong>This week</strong> — anything due in the next 7 days, filterable by person or everyone.</li>
               </ul>
             </div>
 
@@ -1398,8 +1662,8 @@ export default function HydroTracker() {
             </div>
 
             <div className="tr-help-section">
-              <h3>The Ben / Boone toggle</h3>
-              <p>Switches whose projects you're looking at on the Board and Done views. Projects owned by "Both" always show for either person.</p>
+              <h3>The person toggle</h3>
+              <p>Switches whose projects you're looking at on the Board and Done views. Projects owned by "Both" always show for everyone. Add or rename people in Settings.</p>
             </div>
 
             <div className="tr-help-section">
@@ -1623,46 +1887,11 @@ const css = `
 .tr-tab:hover:not(.tr-tab-active) { border-color: var(--ink); color: var(--ink); }
 .tr-tab-active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 .tr-tab .tr-count { color: inherit; opacity: 0.6; }
-.tr-person-toggle {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  background: var(--paper-card);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 3px;
-  cursor: pointer;
-  font-family: 'IBM Plex Sans', sans-serif;
-  font-size: 12px;
-  font-weight: 600;
-  height: 36px;
-}
-.tr-person-toggle span:not(.tr-person-pill) {
-  position: relative;
-  z-index: 1;
-  padding: 0;
-  width: 54px;
-  text-align: center;
-  color: var(--muted);
-  transition: color 0.15s;
-  line-height: 1;
-}
-.tr-person-active { color: var(--paper) !important; }
-.tr-person-pill {
-  position: absolute;
-  top: 3px; left: 3px; bottom: 3px;
-  width: 54px;
-  background: var(--ink);
-  border-radius: 999px;
-  transition: transform 0.2s ease;
-}
-.tr-person-pill-right { transform: translateX(54px); }
-
-/* Three-way segmented filter (This week) */
+/* Dynamic segmented control (person view + week filter) */
 .tr-seg {
   position: relative;
   display: inline-flex;
-  align-items: center;
+  align-items: stretch;
   background: var(--paper-card);
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -1671,16 +1900,19 @@ const css = `
 }
 .tr-seg-pill {
   position: absolute;
-  top: 3px; left: 3px; bottom: 3px;
-  width: 54px;
+  top: 3px;
+  left: 3px;
+  bottom: 3px;
   background: var(--ink);
   border-radius: 999px;
-  transition: transform 0.2s ease;
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1), width 0.22s ease;
 }
 .tr-seg-btn {
   position: relative;
   z-index: 1;
-  width: 54px;
+  flex: 1 1 0;
+  min-width: 54px;
+  padding: 0 14px;
   border: none;
   background: none;
   cursor: pointer;
@@ -1688,8 +1920,8 @@ const css = `
   font-size: 12px;
   font-weight: 600;
   color: var(--muted);
-  padding: 0;
   line-height: 1;
+  white-space: nowrap;
   transition: color 0.15s;
 }
 .tr-seg-btn-active { color: var(--paper); }
@@ -1875,12 +2107,32 @@ body.tr-dragging-active * {
   -webkit-user-select: none !important;
 }
 
-.tr-card-oneline {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
+.tr-kind-row {
+  margin-bottom: 3px;
 }
+.tr-kind-select-wrap {
+  display: inline-flex;
+}
+.tr-kind-select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.tr-kind-select:hover { color: var(--ink); }
+.tr-kind-select:focus { outline: none; color: var(--ink); }
+.tr-kind-select-empty { color: #B0BAC8; font-style: normal; opacity: 0.75; }
+.tr-card-oneline {
 .tr-flag-dot {
   display: inline-flex;
   align-items: center;
@@ -2252,6 +2504,133 @@ body.tr-dragging-active * {
 }
 .tr-modal-sm { max-width: 360px; }
 .tr-modal-help { max-width: 520px; }
+.tr-modal-settings { max-width: 460px; }
+.tr-set-section { margin-bottom: 6px; }
+.tr-set-section h3 {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--copper);
+  margin: 0 0 6px;
+}
+.tr-set-hint {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 14px;
+}
+.tr-set-people {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.tr-set-person {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px 8px 12px;
+  min-height: 44px;
+  flex-wrap: wrap;
+}
+.tr-set-name {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.tr-set-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.tr-set-count {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.tr-set-actions { display: flex; align-items: center; gap: 3px; }
+.tr-set-editrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+.tr-set-input {
+  flex: 1;
+  min-width: 120px;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 13.5px;
+  color: var(--ink);
+  background: var(--paper-card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  transition: border-color 0.15s;
+}
+.tr-set-input:focus { outline: none; border-color: var(--ink); }
+.tr-set-save, .tr-set-cancel { height: 34px; padding: 0 12px; }
+.tr-set-removebox {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tr-set-confirm-text {
+  font-size: 12.5px;
+  color: var(--alert);
+  font-weight: 600;
+  line-height: 1.4;
+}
+.tr-set-confirm-instruct {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.tr-set-confirm-instruct code {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  background: var(--paper-card);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--alert);
+}
+.tr-btn-danger-solid:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.tr-set-addrow {
+  display: flex;
+  gap: 8px;
+}
+.tr-set-addrow .tr-set-input { flex: 1; }
+.tr-set-error {
+  font-size: 12px;
+  color: var(--alert);
+  margin-top: 7px;
+  width: 100%;
+}
+.tr-icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .tr-help-lede {
   font-size: 13.5px;
   color: var(--ink);
