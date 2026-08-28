@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { Plus, X, AlertTriangle, Clock, Check, User, Users, Loader2, Search, Copy, Pencil } from "lucide-react";
 import { getProjects, saveProjects, getPeople, savePeople, officePrefix } from "./storage";
 
@@ -417,17 +417,34 @@ function DuePicker({ d, value, onPick, tabIndex = 0 }) {
 }
 
 function SegControl({ options, value, onChange, ariaLabel }) {
+  const wrapRef = useRef(null);
   const btnRefs = useRef({});
-  const [pill, setPill] = useState({ left: 3, width: 0 });
+  const [pill, setPill] = useState({ left: 0, width: 0, ready: false });
 
-  useEffect(() => {
+  // Measure the active button and place the pill exactly over it. useLayoutEffect
+  // runs before paint so the pill never flashes in the wrong spot on mount.
+  useLayoutEffect(() => {
     const el = btnRefs.current[value];
-    if (el) setPill({ left: el.offsetLeft, width: el.offsetWidth });
+    if (el) setPill({ left: el.offsetLeft, width: el.offsetWidth, ready: true });
   }, [value, options.join("|")]);
 
+  // Re-measure if the container resizes (font load, window resize, name change)
+  useEffect(() => {
+    if (!wrapRef.current) return;
+    const ro = new ResizeObserver(() => {
+      const el = btnRefs.current[value];
+      if (el) setPill({ left: el.offsetLeft, width: el.offsetWidth, ready: true });
+    });
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, [value]);
+
   return (
-    <div className="tr-seg" role="group" aria-label={ariaLabel}>
-      <span className="tr-seg-pill" style={{ transform: `translateX(${pill.left}px)`, width: pill.width }} />
+    <div className="tr-seg" role="group" aria-label={ariaLabel} ref={wrapRef}>
+      <span
+        className={"tr-seg-pill" + (pill.ready ? " tr-seg-pill-ready" : "")}
+        style={{ transform: `translateX(${pill.left}px)`, width: pill.width }}
+      />
       {options.map((opt) => (
         <button
           key={opt}
@@ -1962,19 +1979,21 @@ const css = `
 .tr-seg-pill {
   position: absolute;
   top: 3px;
-  left: 3px;
   bottom: 3px;
+  left: 0;
   background: var(--ink);
   border-radius: 999px;
-  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1), width 0.22s ease;
+  opacity: 0;
+  transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1), width 0.28s cubic-bezier(0.32, 0.72, 0, 1);
 }
+.tr-seg-pill-ready { opacity: 1; }
 .tr-seg-btn {
   position: relative;
   z-index: 1;
   flex: 0 0 auto;
   min-width: 54px;
   max-width: 150px;
-  padding: 0 16px;
+  padding: 0 18px;
   border: none;
   background: none;
   cursor: pointer;
@@ -1986,7 +2005,8 @@ const css = `
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: color 0.15s;
+  text-align: center;
+  transition: color 0.2s ease;
 }
 .tr-seg-btn-active { color: var(--paper); }
 .tr-search {
