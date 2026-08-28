@@ -1917,7 +1917,7 @@ const css = `
   z-index: 1;
   flex: 1 1 0;
   min-width: 54px;
-  max-width: 88px;
+  max-width: 130px;
   padding: 0 14px;
   border: none;
   background: none;
