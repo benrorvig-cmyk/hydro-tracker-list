@@ -352,7 +352,7 @@ export default function HydroTracker() {
   const [confirmTarget, setConfirmTarget] = useState(null);
   const [storageError, setStorageError] = useState("");
   const [people, setPeople] = useState(DEFAULT_PEOPLE);
-  const [activePerson, setActivePerson] = useState(DEFAULT_PEOPLE[0]);
+  const [activePerson, setActivePerson] = useState(() => lsGet("tracker-person-v1", DEFAULT_PEOPLE[0]));
   const [weekFilter, setWeekFilter] = useState("Both");
   const [showSettings, setShowSettings] = useState(false);
   const [boardSort, setBoardSort] = useState(() => lsGet("tracker-sort-v1", "added")); // added | due | updated | custom
@@ -380,9 +380,10 @@ export default function HydroTracker() {
     return () => clearInterval(tick);
   }, []);
 
-  // Remember the chosen sort and which cards are collapsed across reloads
+  // Remember the chosen sort, collapsed cards, and active person across reloads
   useEffect(() => { lsSet("tracker-sort-v1", boardSort); }, [boardSort]);
   useEffect(() => { lsSet("tracker-collapsed-v1", [...collapsedIds]); }, [collapsedIds]);
+  useEffect(() => { if (activePerson) lsSet("tracker-person-v1", activePerson); }, [activePerson]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1051,6 +1052,7 @@ export default function HydroTracker() {
                   key={name}
                   className={"tr-seg-btn" + (currentPerson === name ? " tr-seg-btn-active" : "")}
                   onClick={() => setActivePerson(name)}
+                  title={name}
                 >
                   {name}
                 </button>
@@ -1071,6 +1073,7 @@ export default function HydroTracker() {
                   key={o}
                   className={"tr-seg-btn" + (weekFilter === o ? " tr-seg-btn-active" : "")}
                   onClick={() => setWeekFilter(o)}
+                  title={o}
                 >
                   {o}
                 </button>
@@ -1914,6 +1917,7 @@ const css = `
   z-index: 1;
   flex: 1 1 0;
   min-width: 54px;
+  max-width: 88px;
   padding: 0 14px;
   border: none;
   background: none;
@@ -1924,6 +1928,8 @@ const css = `
   color: var(--muted);
   line-height: 1;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: color 0.15s;
 }
 .tr-seg-btn-active { color: var(--paper); }
@@ -2121,9 +2127,9 @@ body.tr-dragging-active * {
   padding: 0;
   margin: 0;
   font-family: 'IBM Plex Sans', sans-serif;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: var(--muted);
   cursor: pointer;
@@ -2134,9 +2140,8 @@ body.tr-dragging-active * {
 .tr-kind-select-empty { color: #BCC5D2; font-weight: 600; }
 .tr-kind-inline {
   flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-size: 13.5px;
+  font-weight: 600;
   text-transform: uppercase;
   color: var(--muted);
 }
