@@ -815,22 +815,20 @@ export default function HydroTracker() {
 
   // Distinguish a single click (collapse) from a double click (edit) so the
   // card doesn't flicker collapsed-then-open on a double click.
-  // Single click collapses/expands instantly. If a double-click follows, we
-  // undo that toggle and open the editor instead — so there's no 200ms wait
-  // on every click just to detect a possible double-click.
+  // Single click collapses/expands after a short 120ms window, just long
+  // enough to tell a single click from a double-click (which edits) without
+  // feeling laggy.
   const clickTimer = useRef(null);
   function handleCardClick(p) {
-    toggleCollapse(p.id);          // respond immediately — feels snappy
-    clickTimer.current = p.id;     // remember we just toggled this card
-    setTimeout(() => { if (clickTimer.current === p.id) clickTimer.current = null; }, 300);
+    if (clickTimer.current) return; // second click of a double — let dblclick handle it
+    clickTimer.current = setTimeout(() => {
+      clickTimer.current = null;
+      toggleCollapse(p.id);
+    }, 120);
   }
   function handleCardDouble(p) {
-    // A double-click already toggled once via the first click — undo it so the
-    // card's collapsed state is unchanged, then open the editor.
-    if (clickTimer.current === p.id) {
-      toggleCollapse(p.id);
-      clickTimer.current = null;
-    }
+    clearTimeout(clickTimer.current);
+    clickTimer.current = null;
     openEdit(p);
   }
 
