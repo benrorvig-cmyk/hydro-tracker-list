@@ -468,7 +468,7 @@ function ProjectCard({
       onDoubleClick={onDoubleClick}
       title={collapsed ? "Click to expand · double-click to edit · hold to reorder" : "Click to collapse · double-click to edit · hold to reorder"}
     >
-      {/* Type label — its own small caps line when expanded */}
+      {/* Type label + project code on one row, expanded only */}
       {!collapsed && (
         <div className="tr-kind-row" onClick={(e) => e.stopPropagation()}>
           <select
@@ -480,6 +480,7 @@ function ProjectCard({
             <option value="">— type —</option>
             {PROJECT_KINDS.map((k) => <option key={k} value={k}>{k.toUpperCase()}</option>)}
           </select>
+          <CodeBadge code={p.projectCode} copied={codeCopied} onCopy={onCopyCode} tabIndex={tab} />
         </div>
       )}
 
@@ -509,7 +510,6 @@ function ProjectCard({
       {/* Expandable body — animates open/closed */}
       <div className={"tr-card-collapse" + (collapsed ? " tr-card-collapse-closed" : "")} aria-hidden={collapsed}>
         <div className="tr-card-collapse-inner">
-          <CodeBadge code={p.projectCode} copied={codeCopied} onCopy={onCopyCode} tabIndex={tab} />
           <div className="tr-card-meta">
             <OwnerTag owner={p.owner} />
             <DuePicker d={d} value={p.due} onPick={onSetDue} tabIndex={tab} />
@@ -1134,7 +1134,11 @@ export default function HydroTracker() {
   // Inline due-date edit straight from a card (no modal). Keeps the existing
   // time-of-day if there was one, otherwise defaults to 4pm.
   function setDue(p, dateStr) {
-    if (!dateStr) return;
+    // Empty string means the user cleared the date → remove the due date.
+    if (!dateStr) {
+      persist(projects.map((x) => (x.id === p.id ? { ...x, due: "", updatedAt: new Date().toISOString() } : x)));
+      return;
+    }
     const time = p.due && p.due.length >= 16 ? p.due.slice(11, 16) : "16:00";
     const dueISO = new Date(`${dateStr}T${time}`).toISOString();
     persist(projects.map((x) => (x.id === p.id ? { ...x, due: dueISO, updatedAt: new Date().toISOString() } : x)));
@@ -1660,7 +1664,7 @@ export default function HydroTracker() {
             <div className="tr-help-section">
               <h3>The three views</h3>
               <ul className="tr-help-list">
-                <li><strong>Board</strong> — your projects by stage: Not started, In progress, Waiting on reply.</li>
+                <li><strong>Board</strong> — active projects by stage: Not started, In progress, Waiting on reply.</li>
                 <li><strong>Done</strong> — everything you've completed, searchable.</li>
                 <li><strong>This week</strong> — anything due in the next 7 days, filterable by person or everyone.</li>
               </ul>
@@ -1669,18 +1673,25 @@ export default function HydroTracker() {
             <div className="tr-help-section">
               <h3>Working with cards</h3>
               <ul className="tr-help-list">
-                <li><strong>Single click</strong> a card to collapse or expand it — collapsed cards show just the title, flag, and due date.</li>
-                <li><strong>Double click</strong> a card to edit it.</li>
+                <li><strong>Single click</strong> a card to collapse or expand it — collapsed cards show the type, title, and due date on one line.</li>
+                <li><strong>Double click</strong> a card to open the full editor.</li>
+                <li><strong>Click and hold</strong> a card, then drag to reorder it within its column. This switches the sort to “Custom” and saves the order for everyone.</li>
                 <li><strong>Click the title text</strong> to copy it to your clipboard.</li>
                 <li><strong>Click the project number</strong> to copy it (paste it into Dynamics 365 search).</li>
-                <li><strong>Click the due date</strong> to pick a new one right on the card.</li>
+                <li><strong>Click the type label</strong> (Proposal / Submittal / Release) to change it.</li>
+                <li><strong>Click the due date</strong> to pick a new one right on the card. Hitting <em>Clear</em> in the picker removes the date.</li>
                 <li>Use the <strong>status dropdown</strong> to move a project between stages, or the flag and delete icons for the rest.</li>
               </ul>
             </div>
 
             <div className="tr-help-section">
-              <h3>The person toggle</h3>
-              <p>Switches whose projects you're looking at on the Board and Done views. Projects owned by "Both" always show for everyone. Add or rename people in Settings.</p>
+              <h3>Sorting &amp; search</h3>
+              <p>On the Board, sort by date added, due date, last updated, or your own custom drag order. The search box filters by title, notes, or project number.</p>
+            </div>
+
+            <div className="tr-help-section">
+              <h3>People &amp; the person toggle</h3>
+              <p>The toggle switches whose projects you're viewing on the Board and Done views. Projects owned by “Both” always show for everyone. In <strong>Settings</strong> (top right) you can add people, rename them (which updates all their projects), or remove them.</p>
             </div>
 
             <div className="tr-help-section">
@@ -2128,9 +2139,13 @@ body.tr-dragging-active * {
 }
 
 .tr-kind-row {
-  margin-bottom: 5px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 6px;
   line-height: 1;
 }
+.tr-kind-row .tr-code-badge { margin: 0; }
 .tr-kind-select {
   appearance: none;
   -webkit-appearance: none;
